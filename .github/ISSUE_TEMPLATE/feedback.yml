@@ -1,0 +1,31 @@
+name: Feedback / feature request
+description: Tell us what CLAW should do better — generator quality, sounds, workflow, anything.
+title: "[Feedback] "
+labels: ["feedback"]
+body:
+  - type: dropdown
+    id: area
+    attributes:
+      label: What is this about?
+      options:
+        - Generator quality (TECHNO / HOUSE / ACID / BREAKS / MUTATE)
+        - Sound / synthesis
+        - AI generation
+        - Workflow / UI
+        - Export / sharing
+        - New feature idea
+        - Something else
+    validations:
+      required: true
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened / what do you want?
+      description: If a generator made something boring, paste the COPY LINK URL — the pattern is the best bug report.
+    validations:
+      required: true
+  - type: input
+    id: context
+    attributes:
+      label: Your setup
+      placeholder: "e.g. Chrome 130 on macOS, used for DJ set prep"

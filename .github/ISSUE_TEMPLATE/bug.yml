@@ -1,0 +1,23 @@
+name: Bug report
+description: Something is broken — no sound, timing drift, export fails, AI errors.
+title: "[Bug] "
+labels: ["bug"]
+body:
+  - type: textarea
+    id: repro
+    attributes:
+      label: What did you do, what happened, what did you expect?
+    validations:
+      required: true
+  - type: input
+    id: pattern
+    attributes:
+      label: Pattern link (optional)
+      description: Press COPY LINK in CLAW and paste the URL here so we can reproduce with your exact pattern.
+  - type: input
+    id: env
+    attributes:
+      label: Browser + OS
+      placeholder: "e.g. Firefox 133 / Windows 11"
+    validations:
+      required: true

@@ -1,0 +1,139 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>CLAW — Create Loops, Algorithms, Waveforms</title>
+<meta name="description" content="CLAW is a free browser groovebox for DJs and producers. Euclidean rhythm generators, acid synths, AI pattern generation via your own API key, WAV loop export. No cloud, no account, no install.">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><circle cx='8' cy='8' r='6' fill='%23FF3D00'/></svg>">
+<link rel="stylesheet" href="css/claw.css">
+</head>
+<body>
+
+<header class="chassis-bar">
+  <div class="wordmark" id="wordmark"></div>
+  <div class="chassis-meta">
+    <span>LOOP MACHINE</span>
+    <span class="meta-dot" aria-hidden="true"></span>
+    <span>FIRMWARE 0.1.0</span>
+    <span class="meta-dot" aria-hidden="true"></span>
+    <span>44.1 kHz</span>
+  </div>
+</header>
+
+<main class="device" aria-label="CLAW groovebox">
+
+  <!-- Transport -->
+  <section class="transport" aria-label="Transport">
+    <button id="play" class="play-btn" aria-label="Play or stop (Space)">
+      <span class="play-glyph" aria-hidden="true"></span>
+    </button>
+
+    <div class="param">
+      <label class="silk" for="bpm">BPM</label>
+      <div class="stepper">
+        <button class="stepper-btn" data-bpm="-1" aria-label="Decrease BPM">−</button>
+        <input id="bpm" type="number" min="60" max="200" value="128" inputmode="numeric">
+        <button class="stepper-btn" data-bpm="1" aria-label="Increase BPM">+</button>
+      </div>
+    </div>
+
+    <div class="param">
+      <label class="silk" for="swing">SWING</label>
+      <input id="swing" type="range" min="0" max="60" value="0">
+      <span class="param-readout" id="swing-val">0%</span>
+    </div>
+
+    <div class="param">
+      <label class="silk" for="filter">FILTER</label>
+      <input id="filter" type="range" min="0" max="100" value="100">
+      <span class="param-readout" id="filter-val">OPEN</span>
+    </div>
+
+    <div class="param">
+      <label class="silk" for="volume">MAIN</label>
+      <input id="volume" type="range" min="0" max="100" value="85">
+      <span class="param-readout" id="volume-val">85</span>
+    </div>
+  </section>
+
+  <!-- Sequencer grid (built by JS) -->
+  <section class="grid" id="grid" aria-label="Step sequencer"></section>
+  <p class="grid-hint silk">Note tracks T6–T8: click = on · shift-click = next note · Ctrl+Z = undo</p>
+
+  <!-- Tools -->
+  <section class="tools" aria-label="Pattern tools">
+    <div class="tool-group">
+      <span class="silk tool-label">GENERATE</span>
+      <button class="tool-btn" data-style="techno">TECHNO</button>
+      <button class="tool-btn" data-style="house">HOUSE</button>
+      <button class="tool-btn" data-style="acid">ACID</button>
+      <button class="tool-btn" data-style="breaks">BREAKS</button>
+    </div>
+    <div class="tool-group">
+      <span class="silk tool-label">EDIT</span>
+      <button class="tool-btn" id="mutate">MUTATE</button>
+      <button class="tool-btn" id="clear">CLEAR</button>
+    </div>
+    <div class="tool-group">
+      <span class="silk tool-label">OUT</span>
+      <button class="tool-btn" id="export">EXPORT WAV</button>
+      <button class="tool-btn" id="share">COPY LINK</button>
+    </div>
+    <div class="tool-group">
+      <button class="tool-btn tool-btn--ai" id="ai-toggle" aria-expanded="false">AI ⌄</button>
+    </div>
+  </section>
+
+  <!-- AI drawer -->
+  <section class="ai-drawer" id="ai-drawer" hidden aria-label="AI pattern generation">
+    <div class="ai-row">
+      <div class="param param--wide">
+        <label class="silk" for="ai-provider">PROVIDER</label>
+        <select id="ai-provider">
+          <option value="anthropic">Anthropic (Claude)</option>
+          <option value="openai">OpenAI-compatible</option>
+        </select>
+      </div>
+      <div class="param param--wide">
+        <label class="silk" for="ai-model">MODEL</label>
+        <input id="ai-model" type="text" value="claude-haiku-4-5" spellcheck="false">
+      </div>
+      <div class="param param--wide" id="ai-url-wrap" hidden>
+        <label class="silk" for="ai-url">BASE URL</label>
+        <input id="ai-url" type="text" value="https://api.openai.com/v1" spellcheck="false">
+      </div>
+      <div class="param param--wide">
+        <label class="silk" for="ai-key">API KEY</label>
+        <input id="ai-key" type="password" placeholder="sk-…" spellcheck="false" autocomplete="off">
+      </div>
+    </div>
+    <div class="ai-row">
+      <input id="ai-prompt" type="text" class="ai-prompt"
+             placeholder="Describe a loop — e.g. dark rolling techno, minimal hats, hypnotic acid line">
+      <button class="tool-btn tool-btn--accent" id="ai-generate">GENERATE</button>
+    </div>
+    <p class="ai-note">Your key is stored in this browser only and sent directly to the provider. Nothing touches our servers — there are none.</p>
+    <p class="ai-status silk" id="ai-status" role="status"></p>
+  </section>
+
+</main>
+
+<footer class="chassis-footer">
+  <div class="footer-left silk">
+    <span>CLAW-01</span>
+    <span class="meta-dot" aria-hidden="true"></span>
+    <span>MADE OF CODE, NOT PLASTIC</span>
+  </div>
+  <div class="footer-right silk">
+    <a href="https://github.com/surfoli/claw" id="link-github">GITHUB</a>
+    <a href="https://github.com/surfoli/claw/issues/new/choose" id="link-feedback">FEEDBACK</a>
+  </div>
+</footer>
+
+<div class="toast silk" id="toast" role="status"></div>
+
+<script src="js/synth.js"></script>
+<script src="js/claw.js"></script>
+</body>
+</html>
