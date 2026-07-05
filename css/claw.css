@@ -285,6 +285,12 @@ input[type="range"]:hover::-moz-range-thumb { background: #ffffff; }
   padding: 2px 0 12px;
 }
 
+/* remix-chain arrival chip: shows when a shared loop lands */
+.arrival {
+  color: var(--accent);
+  padding: 0 0 12px;
+}
+
 /* ---------- tools ---------- */
 
 .tools {

@@ -43,8 +43,14 @@
     },
     mutes: {},
     levels: {},
+    // remix provenance: gen counts edited-then-reshared hops, parent is the
+    // 8-hex pattern hash this loop was remixed from
+    meta: { gen: 0, parent: null, src: "hand" },
   };
   TRACKS.forEach((t) => { state.mutes[t.id] = false; state.levels[t.id] = 0.8; });
+
+  // set when the session started from a shared link — the remix chain anchor
+  let arrival = null;
 
   // ---------- dot matrix wordmark ----------
 
@@ -99,14 +105,16 @@
       row.appendChild(name);
 
       const mute = document.createElement("button");
-      mute.className = "mute-btn";
+      mute.className = "mute-btn" + (state.mutes[t.id] ? " muted" : "");
       mute.setAttribute("aria-label", `Mute ${t.name}`);
-      mute.setAttribute("aria-pressed", "false");
+      mute.setAttribute("aria-pressed", String(state.mutes[t.id]));
+      row.classList.toggle("muted-row", state.mutes[t.id]);
       mute.addEventListener("click", () => {
         state.mutes[t.id] = !state.mutes[t.id];
         mute.classList.toggle("muted", state.mutes[t.id]);
         mute.setAttribute("aria-pressed", String(state.mutes[t.id]));
         row.classList.toggle("muted-row", state.mutes[t.id]);
+        autosave();
       });
       row.appendChild(mute);
 
@@ -133,10 +141,14 @@
       level.addEventListener("input", () => {
         state.levels[t.id] = level.value / 100;
         level.title = `${t.name} level ${level.value} — double-click resets`;
+        if (buses) buses[t.id].gain.setTargetAtTime(state.levels[t.id], ctx.currentTime, 0.02);
+        autosave();
       });
       level.addEventListener("dblclick", () => {
         level.value = 80;
         state.levels[t.id] = 0.8;
+        if (buses) buses[t.id].gain.setTargetAtTime(0.8, ctx.currentTime, 0.02);
+        autosave();
       });
       row.appendChild(level);
 
@@ -158,6 +170,7 @@
       arr[s] = arr[s] ? 0 : t.root;
     }
     paintStep(t, s);
+    autosave();
   }
 
   function paintStep(t, s) {
@@ -185,10 +198,24 @@
   let timerId = null;
   const notesInQueue = [];
 
+  // per-track gain buses: the channel-strip seam that pan/solo/FX sends will
+  // plug into later — voices never connect to the master input directly
+  let buses = null;
+  function makeBuses(c, m) {
+    const b = {};
+    TRACKS.forEach((t) => {
+      b[t.id] = c.createGain();
+      b[t.id].gain.value = state.levels[t.id];
+      b[t.id].connect(m.input);
+    });
+    return b;
+  }
+
   function ensureCtx() {
     if (!ctx) {
       ctx = new (window.AudioContext || window.webkitAudioContext)();
       master = masterChain(ctx);
+      buses = makeBuses(ctx, master);
       applyFilter();
       applyVolume();
     }
@@ -199,22 +226,33 @@
     return 60 / state.bpm / 4;
   }
 
-  function scheduleStep(step, time) {
-    const spb = secondsPerStep();
-    const swung = step % 2 === 1 ? time + (state.swing / 100) * spb * 0.5 : time;
-    notesInQueue.push({ step, time: swung });
+  function swungTime(base, step, spb) {
+    return step % 2 === 1 ? base + (state.swing / 100) * spb * 0.5 : base;
+  }
 
+  // THE single trigger path — live playback and offline export both call this,
+  // so what you hear is exactly what you export. Track level lives on the bus.
+  function triggerStep(c, b, step, time, spb) {
     TRACKS.forEach((t) => {
       const v = state.pattern[t.id][step];
       if (!v || state.mutes[t.id]) return;
-      const lvl = state.levels[t.id];
       if (t.type === "drum") {
-        voices[t.id](ctx, master.input, swung, lvl);
+        voices[t.id](c, b[t.id], time, 1);
       } else {
-        const vel = (t.id === "acid" && step % 4 === 0 ? 0.95 : 0.8) * lvl;
-        voices[t.id](ctx, master.input, swung, vel, v, spb * (t.id === "stab" ? 2 : 0.9));
+        // deliberate since v0.2: quarter-step vel 0.95 drives the acid accent
+        // branch (higher Q + cutoff) — in v0.1 velocity was scaled by track
+        // level, which silenced the accent unintentionally
+        const vel = t.id === "acid" && step % 4 === 0 ? 0.95 : 0.8;
+        voices[t.id](c, b[t.id], time, vel, v, spb * (t.id === "stab" ? 2 : 0.9));
       }
     });
+  }
+
+  function scheduleStep(step, time) {
+    const spb = secondsPerStep();
+    const swung = swungTime(time, step, spb);
+    notesInQueue.push({ step, time: swung });
+    triggerStep(ctx, buses, step, swung, spb);
   }
 
   function scheduler() {
@@ -264,8 +302,22 @@
 
   // ---------- algorithmic generators ----------
 
-  const rnd = (n) => Math.floor(Math.random() * n);
-  const chance = (p) => Math.random() < p;
+  // seeded PRNG (mulberry32): generators are reproducible per seed, so future
+  // style packs can ship a seed and replay the exact same pattern
+  let rng = Math.random;
+  function reseed() {
+    let a = crypto.getRandomValues(new Uint32Array(1))[0];
+    const seed = a;
+    rng = function () {
+      a |= 0; a = (a + 0x6d2b79f5) | 0;
+      let t = Math.imul(a ^ (a >>> 15), 1 | a);
+      t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+      return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+    };
+    return seed;
+  }
+  const rnd = (n) => Math.floor(rng() * n);
+  const chance = (p) => rng() < p;
 
   // one-deep undo for every destructive pattern change (Ctrl/Cmd+Z)
   let undoBuf = null;
@@ -277,6 +329,7 @@
     state.pattern = undoBuf;
     undoBuf = null;
     paintGrid();
+    autosave();
     toast("Undone");
   }
 
@@ -376,10 +429,16 @@
 
   function generate(style) {
     snapshot();
+    reseed();
     const bpm = STYLES[style](state.pattern);
     state.bpm = bpm;
     bpmInput.value = bpm;
+    // fresh material: the remix chain starts over
+    state.meta = { gen: 0, parent: null, src: "gen" };
+    arrival = null;
+    hideArrival();
     paintGrid();
+    autosave();
     toast(`${style.toUpperCase()} pattern generated`);
   }
 
@@ -395,13 +454,18 @@
       }
     });
     paintGrid();
+    autosave();
     toast("Pattern mutated");
   }
 
   function clearPattern() {
     snapshot();
     TRACKS.forEach((t) => { state.pattern[t.id] = new Array(STEPS).fill(0); });
+    state.meta = { gen: 0, parent: null, src: "hand" };
+    arrival = null;
+    hideArrival();
     paintGrid();
+    autosave();
     toast("Pattern cleared — Ctrl+Z to undo");
   }
 
@@ -495,12 +559,18 @@ Use rests — silence is part of the groove.`;
       swingInput.value = state.swing;
       swingVal.textContent = state.swing + "%";
     }
+    // AI output is fresh material: the remix chain starts over
+    state.meta = { gen: 0, parent: null, src: "ai" };
+    arrival = null;
+    hideArrival();
     paintGrid();
+    autosave();
   }
 
   // ---------- WAV export ----------
 
   async function exportWav() {
+    bumpGenIfRemixed(); // the WAV's embedded URL must match what COPY LINK gives
     toast("Rendering 2-bar loop…");
     const bars = 2;
     const spb = secondsPerStep();
@@ -510,21 +580,12 @@ Use rests — silence is part of the groove.`;
     const durSamples = Math.round(dur * sr);
     const off = new OfflineAudioContext(2, durSamples + Math.ceil(tail * sr), sr);
     const m = masterChain(off);
+    const ob = makeBuses(off, m);
     m.filter.frequency.value = filterFreq();
     m.gain.gain.value = state.volume / 100;
     for (let bar = 0; bar < bars; bar++) {
       for (let s = 0; s < STEPS; s++) {
-        const t = bar * STEPS * spb + s * spb + (s % 2 === 1 ? (state.swing / 100) * spb * 0.5 : 0);
-        TRACKS.forEach((tr) => {
-          const v = state.pattern[tr.id][s];
-          if (!v || state.mutes[tr.id]) return;
-          const lvl = state.levels[tr.id];
-          if (tr.type === "drum") voices[tr.id](off, m.input, t, lvl);
-          else {
-            const vel = (tr.id === "acid" && s % 4 === 0 ? 0.95 : 0.8) * lvl;
-            voices[tr.id](off, m.input, t, vel, v, spb * (tr.id === "stab" ? 2 : 0.9));
-          }
-        });
+        triggerStep(off, ob, s, swungTime(bar * STEPS * spb + s * spb, s, spb), spb);
       }
     }
     const buf = await off.startRendering();
@@ -537,18 +598,27 @@ Use rests — silence is part of the groove.`;
       for (let i = 0; i < src.length - durSamples; i++) out[i] += src[durSamples + i];
       chans.push(out);
     }
-    const blob = encodeWav(chans, sr);
+    const name = loopName().toLowerCase();
+    const comment = `Made with CLAW — remix this exact loop: ${buildShareUrl(serializeProject())}`;
+    const blob = encodeWav(chans, sr, comment);
     const a = document.createElement("a");
     a.href = URL.createObjectURL(blob);
-    a.download = `claw-loop-${state.bpm}bpm.wav`;
+    a.download = `claw-${name}-${state.bpm}bpm.wav`;
     a.click();
     setTimeout(() => URL.revokeObjectURL(a.href), 10000);
-    toast(`Exported ${bars}-bar loop @ ${state.bpm} BPM`);
+    toast(`Exported ${name.toUpperCase()} @ ${state.bpm} BPM`);
   }
 
-  function encodeWav(chans, sr) {
+  function encodeWav(chans, sr, comment) {
     const ch = chans.length, len = chans[0].length;
-    const bytes = 44 + len * ch * 2;
+    const dataBytes = len * ch * 2;
+    // LIST/INFO/ICMT chunk carries the share URL inside the file itself —
+    // the exported WAV is a carrier that can always find its way home
+    const cm = comment ? new TextEncoder().encode(comment) : null;
+    const cmLen = cm ? cm.length + 1 : 0;               // + null terminator
+    const cmPad = cm ? cmLen + (cmLen & 1) : 0;         // chunks are even-padded
+    const listBytes = cm ? 8 + 4 + 8 + cmPad : 0;       // LIST hdr + INFO + ICMT hdr + text
+    const bytes = 44 + dataBytes + listBytes;
     const ab = new ArrayBuffer(bytes);
     const dv = new DataView(ab);
     const wstr = (o, s) => { for (let i = 0; i < s.length; i++) dv.setUint8(o + i, s.charCodeAt(i)); };
@@ -556,7 +626,7 @@ Use rests — silence is part of the groove.`;
     wstr(12, "fmt "); dv.setUint32(16, 16, true); dv.setUint16(20, 1, true);
     dv.setUint16(22, ch, true); dv.setUint32(24, sr, true);
     dv.setUint32(28, sr * ch * 2, true); dv.setUint16(32, ch * 2, true); dv.setUint16(34, 16, true);
-    wstr(36, "data"); dv.setUint32(40, len * ch * 2, true);
+    wstr(36, "data"); dv.setUint32(40, dataBytes, true);
     let o = 44;
     for (let i = 0; i < len; i++) {
       for (let c = 0; c < ch; c++) {
@@ -565,47 +635,185 @@ Use rests — silence is part of the groove.`;
         o += 2;
       }
     }
+    if (cm) {
+      wstr(o, "LIST"); dv.setUint32(o + 4, 4 + 8 + cmPad, true); wstr(o + 8, "INFO");
+      wstr(o + 12, "ICMT"); dv.setUint32(o + 16, cmLen, true);
+      for (let i = 0; i < cm.length; i++) dv.setUint8(o + 20 + i, cm[i]);
+    }
     return new Blob([ab], { type: "audio/wav" });
+  }
+
+  // ---------- project format v1 ----------
+  // ONE schema for share links, project files, and autosave — and ONE sanitizer.
+  // Legacy pre-v1 hashes ({bpm, swing, pattern}) parse through the same path
+  // forever: never break an old share URL.
+
+  const ADJ = ["IRON","NEON","ACID","VELVET","CHROME","DELTA","RAPID","STATIC",
+    "HOLLOW","PRIME","NIGHT","SOLAR","MAGNET","VAPOR","TURBO","ZERO",
+    "ECHO","PULSE","NOVA","GRID","WIRE","CARBON","COBALT","LUNAR",
+    "PANIC","ROGUE","SIGNAL","STROBE","TIGER","ULTRA","VOID","AMBER"];
+  const NOUN = ["MOTH","WOLF","ENGINE","GARDEN","MIRROR","HAMMER","ORBIT","RITUAL",
+    "CIRCUIT","METEOR","PANTHER","REACTOR","SIREN","TUNNEL","VECTOR","BUNKER",
+    "CANYON","DYNAMO","FALCON","GLACIER","HORIZON","JAGUAR","KERNEL","LAGOON",
+    "MOTOR","NEEDLE","OCEAN","PISTON","QUARTZ","ROTOR","SPIDER","TURBINE"];
+
+  function hash32(str) { // FNV-1a
+    let h = 0x811c9dc5;
+    for (let i = 0; i < str.length; i++) {
+      h ^= str.charCodeAt(i);
+      h = Math.imul(h, 0x01000193);
+    }
+    return h >>> 0;
+  }
+  const patternHash = () => hash32(JSON.stringify(state.pattern));
+  // deterministic 2-word loop name: same pattern, same name, on every machine
+  const loopName = (h = patternHash()) => `${ADJ[h & 31]}-${NOUN[(h >>> 5) & 31]}`;
+  const hash8 = (h = patternHash()) => h.toString(16).padStart(8, "0");
+
+  function serializeProject() {
+    return {
+      format: "claw", v: 1,
+      bpm: state.bpm, swing: state.swing, filter: state.filter, volume: state.volume,
+      pattern: state.pattern, levels: state.levels, mutes: state.mutes,
+      meta: { name: loopName(), gen: state.meta.gen, parent: state.meta.parent, src: state.meta.src },
+    };
+  }
+
+  const clampInt = (v, lo, hi, dflt) => {
+    const n = Math.round(Number(v));
+    return Number.isFinite(n) ? Math.min(hi, Math.max(lo, n)) : dflt;
+  };
+
+  // the single sanitize/clamp entry point: share links, project files, and
+  // autosave all flow through here — never trust serialized input
+  function applyProject(data, src) {
+    if (!data || typeof data !== "object" || !data.pattern) throw new Error("not a CLAW project");
+    TRACKS.forEach((t) => {
+      const raw = Array.isArray(data.pattern[t.id]) ? data.pattern[t.id] : null;
+      if (!raw) return;
+      const arr = [];
+      for (let s = 0; s < STEPS; s++) {
+        const v = Math.max(0, Math.round(Number(raw[s]) || 0));
+        arr.push(t.type === "drum" ? (v ? 1 : 0) : (v ? Math.min(80, Math.max(24, v)) : 0));
+      }
+      state.pattern[t.id] = arr;
+    });
+    if (data.bpm != null) state.bpm = clampInt(data.bpm, 60, 200, 128);
+    if (data.swing != null) state.swing = clampInt(data.swing, 0, 60, 0);
+    if (data.filter != null) state.filter = clampInt(data.filter, 0, 100, 100);
+    if (data.volume != null) state.volume = clampInt(data.volume, 0, 100, 85);
+    if (data.levels && typeof data.levels === "object") {
+      TRACKS.forEach((t) => {
+        if (data.levels[t.id] != null) {
+          const l = Number(data.levels[t.id]);
+          state.levels[t.id] = Number.isFinite(l) ? Math.min(1, Math.max(0, l)) : 0.8;
+        }
+      });
+    }
+    if (data.mutes && typeof data.mutes === "object") {
+      TRACKS.forEach((t) => { state.mutes[t.id] = !!data.mutes[t.id]; });
+    }
+    const m = data.meta && typeof data.meta === "object" ? data.meta : {};
+    state.meta = {
+      gen: clampInt(m.gen, 0, 9999, 0),
+      parent: typeof m.parent === "string" ? m.parent.slice(0, 8) : null,
+      src: src || (typeof m.src === "string" ? m.src.slice(0, 8) : "hand"),
+    };
+    // keep live playback in sync: loaded levels must reach the buses too,
+    // or what you hear diverges from what you'd export
+    if (buses) {
+      TRACKS.forEach((t) => buses[t.id].gain.setTargetAtTime(state.levels[t.id], ctx.currentTime, 0.02));
+    }
+  }
+
+  function syncTransportUI() {
+    bpmInput.value = state.bpm;
+    swingInput.value = state.swing;
+    swingVal.textContent = state.swing + "%";
+    filterInput.value = state.filter;
+    filterVal.textContent = state.filter == 100 ? "OPEN" : Math.round(filterFreq()) + " Hz";
+    volumeInput.value = state.volume;
+    volumeVal.textContent = state.volume;
+    applyFilter();
+    applyVolume();
+  }
+
+  function autosave() {
+    try { localStorage.setItem("claw-autosave", JSON.stringify(serializeProject())); } catch { /* quota */ }
   }
 
   // ---------- share link ----------
 
-  function shareLink() {
-    const data = { bpm: state.bpm, swing: state.swing, pattern: state.pattern };
-    const hash = btoa(unescape(encodeURIComponent(JSON.stringify(data))));
+  function buildShareUrl(proj) {
+    const hash = btoa(unescape(encodeURIComponent(JSON.stringify(proj))));
     // location.origin is the string "null" on file:// — fall back to the raw href
     const base = !location.origin || location.origin === "null"
       ? location.href.split("#")[0]
       : location.origin + location.pathname;
-    const url = `${base}#p=${hash}`;
+    return `${base}#p=${hash}`;
+  }
+
+  // arriving via a shared link and changing the pattern extends the chain —
+  // shared by COPY LINK and EXPORT WAV so both publish the same provenance
+  function bumpGenIfRemixed() {
+    if (arrival && hash8() !== arrival.hash8) {
+      state.meta.gen = arrival.gen + 1;
+      state.meta.parent = arrival.hash8;
+      arrival = { hash8: hash8(), gen: state.meta.gen };
+      autosave();
+    }
+  }
+
+  function shareLink() {
+    bumpGenIfRemixed();
+    const proj = serializeProject();
+    const url = buildShareUrl(proj);
     navigator.clipboard.writeText(url).then(
-      () => toast("Loop link copied — send it to someone"),
+      () => toast(`${proj.meta.name} GEN ${proj.meta.gen} copied — send it on`),
       () => { prompt("Copy this link:", url); }
     );
   }
 
   function loadFromHash() {
     const m = location.hash.match(/#p=(.+)/);
-    if (!m) return;
+    if (!m) return false;
     try {
       const data = JSON.parse(decodeURIComponent(escape(atob(m[1]))));
-      // never trust a URL: clamp everything like applyAiPattern does
-      if (data.pattern) {
-        TRACKS.forEach((t) => {
-          const src = Array.isArray(data.pattern[t.id]) ? data.pattern[t.id] : null;
-          if (!src) return;
-          const arr = [];
-          for (let s = 0; s < STEPS; s++) {
-            const v = Math.max(0, Math.round(Number(src[s]) || 0));
-            arr.push(t.type === "drum" ? (v ? 1 : 0) : (v ? Math.min(80, Math.max(24, v)) : 0));
-          }
-          state.pattern[t.id] = arr;
-        });
+      applyProject(data, "link");
+      arrival = { hash8: hash8(), gen: state.meta.gen };
+      showArrival(`LOADED: ${loopName()} · GEN ${state.meta.gen} — remix it, then COPY LINK to extend the chain`);
+      return true;
+    } catch { return false; /* bad hash — boot with defaults */ }
+  }
+
+  // ---------- save / load project files ----------
+
+  function saveProject() {
+    const proj = serializeProject();
+    const blob = new Blob([JSON.stringify(proj, null, 2)], { type: "application/json" });
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = `claw-${proj.meta.name.toLowerCase()}.json`;
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(a.href), 10000);
+    toast(`Saved ${proj.meta.name} as a file you own`);
+  }
+
+  function loadProjectFile(file) {
+    file.text().then((txt) => {
+      try {
+        applyProject(JSON.parse(txt), "file");
+        // a loaded file is its own lineage — never chain it to a previous link
+        arrival = null;
+        hideArrival();
+        buildGrid();
+        syncTransportUI();
+        autosave();
+        toast(`Loaded ${loopName()}`);
+      } catch {
+        toast("That is not a CLAW project file");
       }
-      if (data.bpm) state.bpm = Math.min(200, Math.max(60, Math.round(Number(data.bpm)) || 128));
-      if (data.swing != null) state.swing = Math.min(60, Math.max(0, Math.round(Number(data.swing)) || 0));
-      toast("Shared loop loaded");
-    } catch { /* bad hash — ignore */ }
+    }).catch(() => toast("Could not read that file"));
   }
 
   // ---------- controls wiring ----------
@@ -637,17 +845,20 @@ Use rests — silence is part of the groove.`;
   bpmInput.addEventListener("change", () => {
     state.bpm = Math.min(200, Math.max(60, +bpmInput.value || 128));
     bpmInput.value = state.bpm;
+    autosave();
   });
   document.querySelectorAll("[data-bpm]").forEach((b) =>
     b.addEventListener("click", () => {
       state.bpm = Math.min(200, Math.max(60, state.bpm + +b.dataset.bpm));
       bpmInput.value = state.bpm;
+      autosave();
     })
   );
 
   swingInput.addEventListener("input", () => {
     state.swing = +swingInput.value;
     swingVal.textContent = state.swing + "%";
+    autosave();
   });
 
   function filterFreq() {
@@ -662,6 +873,7 @@ Use rests — silence is part of the groove.`;
     state.filter = +filterInput.value;
     filterVal.textContent = state.filter == 100 ? "OPEN" : Math.round(filterFreq()) + " Hz";
     applyFilter();
+    autosave();
   });
 
   function applyVolume() {
@@ -672,6 +884,7 @@ Use rests — silence is part of the groove.`;
     state.volume = +volumeInput.value;
     volumeVal.textContent = state.volume;
     applyVolume();
+    autosave();
   });
 
   document.querySelectorAll("[data-style]").forEach((b) =>
@@ -681,6 +894,17 @@ Use rests — silence is part of the groove.`;
   document.getElementById("clear").addEventListener("click", clearPattern);
   document.getElementById("export").addEventListener("click", exportWav);
   document.getElementById("share").addEventListener("click", shareLink);
+  document.getElementById("save").addEventListener("click", saveProject);
+  const loadFileInput = document.getElementById("load-file");
+  document.getElementById("load").addEventListener("click", () => loadFileInput.click());
+  loadFileInput.addEventListener("change", () => {
+    if (loadFileInput.files[0]) loadProjectFile(loadFileInput.files[0]);
+    loadFileInput.value = "";
+  });
+
+  const arrivalEl = document.getElementById("arrival");
+  function showArrival(msg) { arrivalEl.textContent = msg; arrivalEl.hidden = false; }
+  function hideArrival() { arrivalEl.hidden = true; }
 
   const aiDrawer = document.getElementById("ai-drawer");
   const aiToggle = document.getElementById("ai-toggle");
@@ -720,9 +944,20 @@ Use rests — silence is part of the groove.`;
   // ---------- boot ----------
 
   renderWordmark(document.getElementById("wordmark"), "CLAW");
-  loadFromHash();
+  if (!loadFromHash()) {
+    // no shared link: pick up where you left off — a closed tab never loses work
+    try {
+      const saved = JSON.parse(localStorage.getItem("claw-autosave") || "null");
+      if (saved) applyProject(saved);
+    } catch { /* corrupt autosave — boot with defaults */ }
+  }
   buildGrid();
-  bpmInput.value = state.bpm;
-  swingInput.value = state.swing;
-  swingVal.textContent = state.swing + "%";
+  syncTransportUI();
+
+  // installable + offline once visited; skipped on file:// and on localhost
+  // (a cache-first worker would serve stale files during development)
+  if ("serviceWorker" in navigator && location.protocol.startsWith("http")
+      && !["localhost", "127.0.0.1"].includes(location.hostname)) {
+    navigator.serviceWorker.register("sw.js").catch(() => { /* unsupported */ });
+  }
 })();

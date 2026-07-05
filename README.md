@@ -14,8 +14,9 @@ Built for DJs who want a quick idea machine, producers who want a sketchpad, and
 - **16-step sequencer** — swing, master filter, per-track level and mute. Space bar starts and stops.
 - **Algorithmic generators** — one-press TECHNO / HOUSE / ACID / BREAKS patterns built on Euclidean rhythms and pentatonic note walks. MUTATE nudges the pattern while it plays.
 - **Bring-your-own AI** — describe a loop in plain language ("dark rolling techno, minimal hats, hypnotic acid line") and let a model program the sequencer. Works with an Anthropic API key or any OpenAI-compatible endpoint. Your key is stored in your browser and sent directly to the provider — CLAW has no servers.
-- **WAV export** — render your loop as a clean 2-bar 44.1 kHz WAV, named with its BPM, ready for your DAW, CDJs, or sampler.
-- **Loop sharing** — every pattern serializes into a URL. Send a loop to someone in a chat message.
+- **WAV export** — render your loop as a clean 2-bar 44.1 kHz WAV (`claw-iron-moth-131bpm.wav` — every loop gets a deterministic name), ready for your DAW, CDJs, or sampler. The file carries its own share URL in the WAV comment field, so a loop can always find its way home.
+- **Loop sharing & remix chains** — every pattern serializes into a URL. Open someone's loop, change it, share again: the link tracks the remix generation (`HOLLOW-KERNEL · GEN 3`).
+- **Projects are files you own** — SAVE/LOAD as `.json`, plus autosave in your browser. Works offline; CLAW is an installable PWA.
 
 ## Run it
 
@@ -62,9 +63,17 @@ CLAW improves through feedback loops — the other kind. If a generator makes so
 
 Patterns you make and share are the best bug reports.
 
+## Where this is going
+
+CLAW is becoming a studio: pattern banks and velocity (v0.3), mixer/FX/p-locks (v0.4), MIDI + stem export (v0.5), song mode with an AI arranger (v1.0), samples (v1.1). The full plan is in [ROADMAP.md](ROADMAP.md).
+
+## The pledge
+
+The browser app is the full instrument, forever — no accounts, no cloud, no feature gates, no ads, no telemetry, and AI stays bring-your-own-key. If CLAW ever charges for anything, it's packaging and content (desktop builds, style packs), never capability. The long version is [PRINCIPLES.md](PRINCIPLES.md).
+
 ## Support the project
 
-CLAW is free and MIT-licensed and will stay that way. If it earned a place in your workflow you can sponsor development — see the Sponsor button on this repo. Planned: premium generator styles, longer patterns, song mode.
+CLAW is free and MIT-licensed and will stay that way. If it earned a place in your workflow you can sponsor development — see the Sponsor button on this repo.
 
 ## License
 

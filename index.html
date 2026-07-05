@@ -16,6 +16,8 @@
 <meta name="twitter:title" content="CLAW — a groovebox in your browser">
 <meta name="twitter:description" content="Free groovebox, no install, no account. Press play, remix, pass it on.">
 <meta name="twitter:image" content="https://surfoli.github.io/claw/assets/og.png">
+<meta name="theme-color" content="#0f0f0e">
+<link rel="manifest" href="manifest.json">
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><circle cx='8' cy='8' r='6' fill='%23FF3D00'/></svg>">
 <link rel="stylesheet" href="css/claw.css">
 </head>
@@ -26,7 +28,7 @@
   <div class="chassis-meta">
     <span>LOOP MACHINE</span>
     <span class="meta-dot" aria-hidden="true"></span>
-    <span>FIRMWARE 0.1.0</span>
+    <span>FIRMWARE 0.2.0</span>
     <span class="meta-dot" aria-hidden="true"></span>
     <span>44.1 kHz</span>
   </div>
@@ -71,6 +73,7 @@
   <!-- Sequencer grid (built by JS) -->
   <section class="grid" id="grid" aria-label="Step sequencer"></section>
   <p class="grid-hint silk">Note tracks T6–T8: click = on · shift-click = next note · Ctrl+Z = undo</p>
+  <p class="arrival silk" id="arrival" hidden></p>
 
   <!-- Tools -->
   <section class="tools" aria-label="Pattern tools">
@@ -85,6 +88,12 @@
       <span class="silk tool-label">EDIT</span>
       <button class="tool-btn" id="mutate">MUTATE</button>
       <button class="tool-btn" id="clear">CLEAR</button>
+    </div>
+    <div class="tool-group">
+      <span class="silk tool-label">PROJECT</span>
+      <button class="tool-btn" id="save">SAVE</button>
+      <button class="tool-btn" id="load">LOAD</button>
+      <input type="file" id="load-file" accept=".json,application/json" hidden>
     </div>
     <div class="tool-group">
       <span class="silk tool-label">OUT</span>
