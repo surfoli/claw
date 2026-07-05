@@ -24,33 +24,86 @@
   ];
 
   const PENTA = [0, 3, 5, 7, 10]; // minor pentatonic degrees
+  const BANKS = 4; // A-D
 
-  // Default pattern: plays something good the second you land.
+  // A step cell is 0 (off), a plain number (on, default vel/prob — the
+  // compact/backward-compatible form), or {n, vel, prob} when it carries
+  // per-step dynamics. Helpers below are the only code that should read
+  // these shapes directly.
+  const VEL_CYCLE = [1, 1.15, 0.55]; // normal -> accent -> ghost -> normal
+  const PROB_CYCLE = [100, 75, 50, 25];
+  const cellOn = (c) => !!c;
+  const cellNote = (c) => (typeof c === "object" ? c.n : c);
+  const cellVel = (c) => (typeof c === "object" && c.vel != null ? c.vel : 1);
+  const cellProb = (c) => (typeof c === "object" && c.prob != null ? c.prob : 100);
+  function withMods(n, vel, prob) {
+    if (vel === 1 && prob === 100) return n; // keep the compact form when nothing's modified
+    return { n, vel, prob };
+  }
+  function cycleVel(v) {
+    const i = VEL_CYCLE.findIndex((x) => Math.abs(x - v) < 0.01);
+    return VEL_CYCLE[(i + 1) % VEL_CYCLE.length];
+  }
+  function cycleProb(p) {
+    const i = PROB_CYCLE.indexOf(p);
+    return PROB_CYCLE[(i < 0 ? 0 : i + 1) % PROB_CYCLE.length];
+  }
+  function sanitizeCell(raw, t) {
+    if (raw == null || raw === 0) return 0;
+    if (typeof raw === "object") {
+      const n = Math.max(0, Math.round(Number(raw.n) || 0));
+      if (!n) return 0;
+      const note = t.type === "drum" ? 1 : Math.min(80, Math.max(24, n));
+      const velRaw = Number(raw.vel);
+      const vel = VEL_CYCLE.includes(velRaw) ? velRaw : 1;
+      const probRaw = clampInt(raw.prob, 0, 100, 100);
+      const prob = PROB_CYCLE.includes(probRaw) ? probRaw : 100;
+      return withMods(note, vel, prob);
+    }
+    const v = Math.max(0, Math.round(Number(raw) || 0));
+    if (!v) return 0;
+    return t.type === "drum" ? 1 : Math.min(80, Math.max(24, v));
+  }
+
+  function emptyPatternSet() {
+    const p = {};
+    TRACKS.forEach((t) => { p[t.id] = new Array(STEPS).fill(0); });
+    return p;
+  }
+
+  // Default pattern: plays something good the second you land. Lives in bank A.
+  const DEFAULT_PATTERN = {
+    kick:  [1,0,0,0, 1,0,0,0, 1,0,0,0, 1,0,0,0],
+    snare: [0,0,0,0, 0,0,0,0, 0,0,0,0, 0,0,0,0],
+    clap:  [0,0,0,0, 1,0,0,0, 0,0,0,0, 1,0,0,0],
+    chh:   [1,0,1,0, 1,0,1,0, 1,0,1,0, 1,0,1,1],
+    ohh:   [0,0,1,0, 0,0,1,0, 0,0,1,0, 0,0,1,0],
+    bass:  [33,0,0,33, 0,0,33,0, 33,0,0,33, 0,0,36,0],
+    acid:  [45,0,48,0, 45,0,52,45, 0,45,0,48, 45,0,57,0],
+    stab:  [0,0,0,0, 0,0,0,0, 57,0,0,0, 0,0,0,0],
+  };
+
   const state = {
     bpm: 128,
     swing: 0,          // 0..60 (%)
     filter: 100,       // 0..100
     volume: 85,        // 0..100
-    pattern: {
-      kick:  [1,0,0,0, 1,0,0,0, 1,0,0,0, 1,0,0,0],
-      snare: [0,0,0,0, 0,0,0,0, 0,0,0,0, 0,0,0,0],
-      clap:  [0,0,0,0, 1,0,0,0, 0,0,0,0, 1,0,0,0],
-      chh:   [1,0,1,0, 1,0,1,0, 1,0,1,0, 1,0,1,1],
-      ohh:   [0,0,1,0, 0,0,1,0, 0,0,1,0, 0,0,1,0],
-      bass:  [33,0,0,33, 0,0,33,0, 33,0,0,33, 0,0,36,0],
-      acid:  [45,0,48,0, 45,0,52,45, 0,45,0,48, 45,0,57,0],
-      stab:  [0,0,0,0, 0,0,0,0, 57,0,0,0, 0,0,0,0],
-    },
+    banks: [{ pattern: DEFAULT_PATTERN }, { pattern: emptyPatternSet() }, { pattern: emptyPatternSet() }, { pattern: emptyPatternSet() }],
+    activeBank: 0,
+    pattern: null, // set below — always the same object reference as banks[activeBank].pattern
     mutes: {},
     levels: {},
     // remix provenance: gen counts edited-then-reshared hops, parent is the
     // 8-hex pattern hash this loop was remixed from
     meta: { gen: 0, parent: null, src: "hand" },
   };
+  state.pattern = state.banks[state.activeBank].pattern;
   TRACKS.forEach((t) => { state.mutes[t.id] = false; state.levels[t.id] = 0.8; });
 
   // set when the session started from a shared link — the remix chain anchor
   let arrival = null;
+  // a bank queued to take over at the next bar boundary while playing
+  let queuedBank = null;
 
   // ---------- dot matrix wordmark ----------
 
@@ -127,6 +180,7 @@
         b.setAttribute("aria-label", `${t.name} step ${s + 1}`);
         b.addEventListener("click", (ev) => onStepClick(t, s, ev));
         b.addEventListener("contextmenu", (ev) => { ev.preventDefault(); onStepClick(t, s, { shiftKey: true }); });
+        b.addEventListener("wheel", (ev) => onStepWheel(t, s, ev), { passive: false });
         steps.appendChild(b);
         stepEls[t.id].push(b);
       }
@@ -159,28 +213,55 @@
 
   function onStepClick(t, s, ev) {
     const arr = state.pattern[t.id];
-    if (t.type === "drum") {
-      arr[s] = arr[s] ? 0 : 1;
-    } else if (ev.shiftKey && arr[s]) {
+    const cur = arr[s];
+    if (ev.altKey && cur) {
+      // alt-click: cycle velocity (normal -> accent -> ghost), keep note/prob
+      arr[s] = withMods(cellNote(cur), cycleVel(cellVel(cur)), cellProb(cur));
+    } else if (t.type === "drum") {
+      arr[s] = cur ? 0 : 1;
+    } else if (ev.shiftKey && cur) {
       // shift-click / right-click: walk up the pentatonic scale, wrap after an octave
-      const deg = (((arr[s] - t.root) % 12) + 12) % 12;
+      const deg = (((cellNote(cur) - t.root) % 12) + 12) % 12;
       const idx = PENTA.indexOf(deg); // -1 for off-scale notes (AI can emit any pitch)
-      arr[s] = t.root + PENTA[(idx < 0 ? 0 : idx + 1) % PENTA.length];
+      const nextNote = t.root + PENTA[(idx < 0 ? 0 : idx + 1) % PENTA.length];
+      arr[s] = withMods(nextNote, cellVel(cur), cellProb(cur));
     } else {
-      arr[s] = arr[s] ? 0 : t.root;
+      arr[s] = cur ? 0 : t.root;
     }
     paintStep(t, s);
     autosave();
   }
 
+  function onStepWheel(t, s, ev) {
+    const arr = state.pattern[t.id];
+    const cur = arr[s];
+    if (!cur) return; // only active steps have a probability to adjust
+    ev.preventDefault();
+    arr[s] = withMods(cellNote(cur), cellVel(cur), cycleProb(cellProb(cur)));
+    paintStep(t, s);
+    autosave();
+  }
+
   function paintStep(t, s) {
-    const v = state.pattern[t.id][s];
+    const cell = state.pattern[t.id][s];
     const el = stepEls[t.id][s];
-    el.classList.toggle("on", !!v);
-    el.setAttribute("aria-pressed", String(!!v));
-    if (t.type === "note") {
-      el.textContent = v ? noteName(v) : "";
-      el.title = v ? `${noteName(v)} — shift-click: next note` : "";
+    const on = cellOn(cell);
+    el.classList.toggle("on", on);
+    el.setAttribute("aria-pressed", String(on));
+    const vel = on ? cellVel(cell) : 1;
+    el.classList.toggle("accent", on && vel > 1.05);
+    el.classList.toggle("ghost", on && vel < 0.95);
+    const prob = on ? cellProb(cell) : 100;
+    el.style.opacity = on && prob < 100 ? String(0.4 + (prob / 100) * 0.6) : "";
+    if (t.type === "note") el.textContent = on ? noteName(cellNote(cell)) : "";
+    if (on) {
+      const bits = [];
+      if (t.type === "note") bits.push(noteName(cellNote(cell)));
+      if (vel > 1.05) bits.push("accent"); else if (vel < 0.95) bits.push("ghost");
+      if (prob < 100) bits.push(prob + "% chance");
+      el.title = `${bits.join(" · ")} — alt-click: velocity · wheel: probability${t.type === "note" ? " · shift-click: next note" : ""}`;
+    } else {
+      el.title = "";
     }
   }
 
@@ -232,27 +313,36 @@
 
   // THE single trigger path — live playback and offline export both call this,
   // so what you hear is exactly what you export. Track level lives on the bus.
-  function triggerStep(c, b, step, time, spb) {
+  // rollProb is injected so exportWav can render deterministically (always
+  // hit) while live playback rolls the dice per repeat, per step.
+  function triggerStep(c, b, step, time, spb, rollProb) {
     TRACKS.forEach((t) => {
-      const v = state.pattern[t.id][step];
-      if (!v || state.mutes[t.id]) return;
+      const cell = state.pattern[t.id][step];
+      if (!cell || state.mutes[t.id]) return;
+      const prob = cellProb(cell);
+      if (prob < 100 && rollProb && !rollProb(prob)) return;
+      const stepVel = cellVel(cell);
       if (t.type === "drum") {
-        voices[t.id](c, b[t.id], time, 1);
+        voices[t.id](c, b[t.id], time, stepVel);
       } else {
         // deliberate since v0.2: quarter-step vel 0.95 drives the acid accent
         // branch (higher Q + cutoff) — in v0.1 velocity was scaled by track
-        // level, which silenced the accent unintentionally
-        const vel = t.id === "acid" && step % 4 === 0 ? 0.95 : 0.8;
-        voices[t.id](c, b[t.id], time, vel, v, spb * (t.id === "stab" ? 2 : 0.9));
+        // level, which silenced the accent unintentionally. A per-step accent
+        // (stepVel 1.15) can now push any acid step over that threshold too.
+        const baseVel = t.id === "acid" && step % 4 === 0 ? 0.95 : 0.8;
+        voices[t.id](c, b[t.id], time, baseVel * stepVel, cellNote(cell), spb * (t.id === "stab" ? 2 : 0.9));
       }
     });
   }
 
+  const rollProb = (prob) => rng() * 100 < prob;
+
   function scheduleStep(step, time) {
+    if (step === 0 && queuedBank != null) applyBankSwitch(queuedBank);
     const spb = secondsPerStep();
     const swung = swungTime(time, step, spb);
     notesInQueue.push({ step, time: swung });
-    triggerStep(ctx, buses, step, swung, spb);
+    triggerStep(ctx, buses, step, swung, spb, rollProb);
   }
 
   function scheduler() {
@@ -300,6 +390,46 @@
     playBtn.setAttribute("aria-pressed", "false");
   }
 
+  // ---------- pattern banks ----------
+  // 4 independent 16-step patterns (A-D). Switching while stopped is instant;
+  // switching while playing queues until the bar wraps — the live-performance
+  // move hardware groove boxes are built around.
+
+  function selectBank(i) {
+    if (i === state.activeBank && queuedBank == null) return;
+    if (playing) {
+      queuedBank = i;
+    } else {
+      applyBankSwitch(i);
+    }
+    paintBankButtons();
+  }
+
+  function applyBankSwitch(i) {
+    state.banks[state.activeBank].pattern = state.pattern; // save edits back first
+    state.activeBank = i;
+    state.pattern = state.banks[i].pattern;
+    queuedBank = null;
+    undoBuf = null; // undo history doesn't cross a bank switch
+    if (playing) lastDrawnStep = -1;
+    // repaint, don't rebuild: track/step counts never change between banks,
+    // only cell contents — a full buildGrid() teardown here can run inside
+    // the audio scheduler's tick and risks stalling it right on the downbeat
+    paintGrid();
+    paintBankButtons();
+    autosave();
+  }
+
+  function paintBankButtons() {
+    // the active bank stays highlighted even while a switch is queued, so a
+    // performer can see both "what's playing now" and "what's coming next"
+    bankBtns.forEach((b, i) => {
+      b.classList.toggle("active", i === state.activeBank);
+      b.classList.toggle("queued", queuedBank === i);
+      b.setAttribute("aria-pressed", String(i === state.activeBank));
+    });
+  }
+
   // ---------- algorithmic generators ----------
 
   // seeded PRNG (mulberry32): generators are reproducible per seed, so future
@@ -327,6 +457,7 @@
   function undo() {
     if (!undoBuf) return;
     state.pattern = undoBuf;
+    state.banks[state.activeBank].pattern = state.pattern; // keep bank storage in sync
     undoBuf = null;
     paintGrid();
     autosave();
@@ -361,16 +492,21 @@
     return line;
   }
 
+  // a few hats at ghost velocity reads as a human hand, not a demo loop
+  function ghostifyHats(arr) {
+    return arr.map((v) => (v && chance(0.4) ? withMods(1, 0.55, 100) : v));
+  }
+
   const STYLES = {
     techno(p) {
       p.kick = [1,0,0,0, 1,0,0,0, 1,0,0,0, 1,0,0,0];
       if (chance(0.4)) p.kick[14] = 1;
       p.clap = [0,0,0,0, 1,0,0,0, 0,0,0,0, 1,0,0,0];
       p.snare = chance(0.3) ? euclid(3, 16, 6).map((v, i) => (i > 11 && v ? 1 : 0)) : new Array(16).fill(0);
-      p.chh = euclid(10 + rnd(6), 16, rnd(2));
+      p.chh = ghostifyHats(euclid(10 + rnd(6), 16, rnd(2)));
       p.ohh = [0,0,1,0, 0,0,1,0, 0,0,1,0, 0,0,1,0];
       p.bass = noteLine(33, 0.45, 0.25);
-      p.acid = noteLine(45, 0.35 + Math.random() * 0.25, 0.5);
+      p.acid = noteLine(45, 0.35 + rng() * 0.25, 0.5); // was Math.random() — now uses the seeded stream too
       p.stab = new Array(16).fill(0);
       if (chance(0.5)) p.stab[8 + rnd(4)] = 57;
       return 128 + rnd(8);
@@ -381,6 +517,7 @@
       p.snare = new Array(16).fill(0);
       p.chh = [0,0,1,0, 0,0,1,0, 0,0,1,0, 0,0,1,0];
       if (chance(0.5)) p.chh = p.chh.map((v, i) => (i % 2 === 0 && chance(0.3) ? 1 : v));
+      p.chh = ghostifyHats(p.chh);
       p.ohh = [0,0,1,0, 0,0,1,0, 0,0,1,0, 0,0,1,1];
       p.bass = new Array(16).fill(0);
       [3, 6, 11, 14].forEach((s) => { if (chance(0.85)) p.bass[s] = pentaNote(33, 1); });
@@ -393,7 +530,7 @@
       p.kick = [1,0,0,0, 1,0,0,0, 1,0,0,0, 1,0,0,0];
       p.clap = [0,0,0,0, 1,0,0,0, 0,0,0,0, 1,0,0,0];
       p.snare = new Array(16).fill(0);
-      p.chh = euclid(12 + rnd(4), 16);
+      p.chh = ghostifyHats(euclid(12 + rnd(4), 16));
       p.ohh = [0,0,1,0, 0,0,1,0, 0,0,1,0, 0,0,1,0];
       p.bass = new Array(16).fill(0);
       // rolling 303 line: mostly 16ths, walks the scale, octave jumps
@@ -416,7 +553,7 @@
       if (chance(0.5)) p.kick[13] = 1;
       p.snare = [0,0,0,0, 1,0,0,0, 0,0,0,0, 1,0,0,1];
       p.clap = new Array(16).fill(0);
-      p.chh = euclid(8 + rnd(6), 16, 1);
+      p.chh = ghostifyHats(euclid(8 + rnd(6), 16, 1));
       p.ohh = new Array(16).fill(0);
       if (chance(0.6)) p.ohh[6] = 1;
       p.bass = noteLine(33, 0.4, 0.4);
@@ -548,10 +685,10 @@ Use rests — silence is part of the groove.`;
     snapshot();
     TRACKS.forEach((t) => {
       if (!Array.isArray(data[t.id])) return;
-      const arr = data[t.id].slice(0, STEPS).map((v) => Math.max(0, Math.round(Number(v) || 0)));
-      while (arr.length < STEPS) arr.push(0);
-      if (t.type === "drum") state.pattern[t.id] = arr.map((v) => (v ? 1 : 0));
-      else state.pattern[t.id] = arr.map((v) => (v ? Math.min(80, Math.max(24, v)) : 0));
+      const src = data[t.id];
+      const arr = [];
+      for (let s = 0; s < STEPS; s++) arr.push(sanitizeCell(src[s], t));
+      state.pattern[t.id] = arr;
     });
     if (data.bpm) { state.bpm = Math.min(200, Math.max(60, data.bpm | 0)); bpmInput.value = state.bpm; }
     if (data.swing != null) {
@@ -585,7 +722,7 @@ Use rests — silence is part of the groove.`;
     m.gain.gain.value = state.volume / 100;
     for (let bar = 0; bar < bars; bar++) {
       for (let s = 0; s < STEPS; s++) {
-        triggerStep(off, ob, s, swungTime(bar * STEPS * spb + s * spb, s, spb), spb);
+        triggerStep(off, ob, s, swungTime(bar * STEPS * spb + s * spb, s, spb), spb, rollProb);
       }
     }
     const buf = await off.startRendering();
@@ -671,10 +808,18 @@ Use rests — silence is part of the groove.`;
   const hash8 = (h = patternHash()) => h.toString(16).padStart(8, "0");
 
   function serializeProject() {
+    // keep the bank store in sync with whatever's live before reading it out
+    state.banks[state.activeBank].pattern = state.pattern;
     return {
       format: "claw", v: 1,
       bpm: state.bpm, swing: state.swing, filter: state.filter, volume: state.volume,
-      pattern: state.pattern, levels: state.levels, mutes: state.mutes,
+      // top-level `pattern` mirrors the active bank — additive fields never
+      // bump the version, so anything reading only v1's original shape still
+      // gets a sensible single pattern; `banks` is for consumers that know it
+      pattern: state.pattern,
+      banks: state.banks.map((b) => ({ pattern: b.pattern })),
+      activeBank: state.activeBank,
+      levels: state.levels, mutes: state.mutes,
       meta: { name: loopName(), gen: state.meta.gen, parent: state.meta.parent, src: state.meta.src },
     };
   }
@@ -687,17 +832,28 @@ Use rests — silence is part of the groove.`;
   // the single sanitize/clamp entry point: share links, project files, and
   // autosave all flow through here — never trust serialized input
   function applyProject(data, src) {
-    if (!data || typeof data !== "object" || !data.pattern) throw new Error("not a CLAW project");
-    TRACKS.forEach((t) => {
-      const raw = Array.isArray(data.pattern[t.id]) ? data.pattern[t.id] : null;
-      if (!raw) return;
-      const arr = [];
-      for (let s = 0; s < STEPS; s++) {
-        const v = Math.max(0, Math.round(Number(raw[s]) || 0));
-        arr.push(t.type === "drum" ? (v ? 1 : 0) : (v ? Math.min(80, Math.max(24, v)) : 0));
+    if (!data || typeof data !== "object") throw new Error("not a CLAW project");
+    const banksData = Array.isArray(data.banks) && data.banks.length
+      ? data.banks
+      : (data.pattern ? [{ pattern: data.pattern }] : null); // legacy: one pattern, no banks
+    if (!banksData) throw new Error("not a CLAW project");
+    state.banks = Array.from({ length: BANKS }, (_, i) => {
+      const p = emptyPatternSet();
+      const raw = banksData[i] && banksData[i].pattern;
+      if (raw) {
+        TRACKS.forEach((t) => {
+          if (!Array.isArray(raw[t.id])) return;
+          const arr = [];
+          for (let s = 0; s < STEPS; s++) arr.push(sanitizeCell(raw[t.id][s], t));
+          p[t.id] = arr;
+        });
       }
-      state.pattern[t.id] = arr;
+      return { pattern: p };
     });
+    state.activeBank = clampInt(data.activeBank, 0, BANKS - 1, 0);
+    state.pattern = state.banks[state.activeBank].pattern;
+    queuedBank = null; // a freshly loaded project replaces the whole bank set
+    undoBuf = null; // a stale undo buffer must never overwrite freshly loaded data
     if (data.bpm != null) state.bpm = clampInt(data.bpm, 60, 200, 128);
     if (data.swing != null) state.swing = clampInt(data.swing, 0, 60, 0);
     if (data.filter != null) state.filter = clampInt(data.filter, 0, 100, 100);
@@ -808,6 +964,7 @@ Use rests — silence is part of the groove.`;
         hideArrival();
         buildGrid();
         syncTransportUI();
+        paintBankButtons();
         autosave();
         toast(`Loaded ${loopName()}`);
       } catch {
@@ -890,6 +1047,9 @@ Use rests — silence is part of the groove.`;
   document.querySelectorAll("[data-style]").forEach((b) =>
     b.addEventListener("click", () => generate(b.dataset.style))
   );
+  const bankBtns = [...document.querySelectorAll(".bank-btn")];
+  bankBtns.forEach((b, i) => b.addEventListener("click", () => selectBank(i)));
+
   document.getElementById("mutate").addEventListener("click", mutate);
   document.getElementById("clear").addEventListener("click", clearPattern);
   document.getElementById("export").addEventListener("click", exportWav);
@@ -953,6 +1113,7 @@ Use rests — silence is part of the groove.`;
   }
   buildGrid();
   syncTransportUI();
+  paintBankButtons();
 
   // installable + offline once visited; skipped on file:// and on localhost
   // (a cache-first worker would serve stale files during development)

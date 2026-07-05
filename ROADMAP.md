@@ -20,8 +20,10 @@ Progress is tracked in issues; ship order matters more than ship dates.
 
 ## v0.3 — Sequencer depth (2–3 weeks)
 
-- [ ] Pattern banks A–D with chaining; per-track pattern length (polymeter)
-- [ ] Per-step velocity / probability / ratchets (step cells become objects internally; wire format stays int-compatible)
+- [x] Pattern banks A–D — instant switch while stopped, quantized to the next bar while playing (the live-performance move)
+- [x] Per-step velocity (normal/accent/ghost via alt-click) and probability (25/50/75/100% via wheel) — step cells are objects internally, wire format stays int-compatible; generators now sprinkle ghost hats automatically
+- [ ] Per-track pattern length (polymeter) — not yet; banks shipped without it to keep the format change contained
+- [ ] Ratchets (sub-step retriggers) — deferred, no visual/gesture budget left this pass
 - [ ] AudioWorklet tick clock with setInterval fallback (fixes background-tab throttling; `file://` keeps working)
 - [ ] QWERTY keyboard play + quantized REC into the pattern
 - [ ] 15 € Supporter Edition desktop build (Tauri) — see PRINCIPLES.md: packaging, never gates

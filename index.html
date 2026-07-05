@@ -28,7 +28,7 @@
   <div class="chassis-meta">
     <span>LOOP MACHINE</span>
     <span class="meta-dot" aria-hidden="true"></span>
-    <span>FIRMWARE 0.2.0</span>
+    <span>FIRMWARE 0.3.0</span>
     <span class="meta-dot" aria-hidden="true"></span>
     <span>44.1 kHz</span>
   </div>
@@ -70,9 +70,19 @@
     </div>
   </section>
 
+  <!-- Pattern banks -->
+  <section class="banks" aria-label="Pattern banks">
+    <span class="silk tool-label">BANK</span>
+    <button class="bank-btn active" data-bank="0" aria-pressed="true">A</button>
+    <button class="bank-btn" data-bank="1" aria-pressed="false">B</button>
+    <button class="bank-btn" data-bank="2" aria-pressed="false">C</button>
+    <button class="bank-btn" data-bank="3" aria-pressed="false">D</button>
+    <span class="silk banks-hint">switch while playing — queues for the next bar</span>
+  </section>
+
   <!-- Sequencer grid (built by JS) -->
   <section class="grid" id="grid" aria-label="Step sequencer"></section>
-  <p class="grid-hint silk">Note tracks T6–T8: click = on · shift-click = next note · Ctrl+Z = undo</p>
+  <p class="grid-hint silk">Note tracks T6–T8: click = on · shift-click = next note · alt-click = velocity · wheel = probability · Ctrl+Z = undo</p>
   <p class="arrival silk" id="arrival" hidden></p>
 
   <!-- Tools -->

@@ -210,6 +210,42 @@ input[type="range"]::-moz-range-thumb {
 }
 input[type="range"]:hover::-moz-range-thumb { background: #ffffff; }
 
+/* ---------- pattern banks ---------- */
+
+.banks {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding-top: 16px;
+  border-top: 1px solid var(--panel-edge);
+}
+
+.banks-hint { color: var(--silk); margin-left: 4px; }
+
+.bank-btn {
+  width: 28px; height: 28px;
+  border-radius: 4px;
+  border: 1px solid var(--panel-edge);
+  background: transparent;
+  color: var(--silk);
+  font-family: var(--mono);
+  font-size: 12px;
+  cursor: pointer;
+}
+.bank-btn:hover { border-color: var(--silver); color: var(--silver); }
+.bank-btn.active { border-color: var(--accent); color: var(--accent); }
+.bank-btn.queued {
+  border-color: var(--accent);
+  border-style: dashed;
+  color: var(--accent);
+  animation: bank-queued-pulse 0.8s ease-in-out infinite;
+}
+
+@keyframes bank-queued-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.4; }
+}
+
 /* ---------- sequencer grid ---------- */
 
 .grid { padding: 18px 0 6px; }
@@ -274,6 +310,10 @@ input[type="range"]:hover::-moz-range-thumb { background: #ffffff; }
 .step.beat { border-color: #55554f; }
 .step.now { box-shadow: 0 0 0 2px var(--panel), 0 0 0 3px #e8e6e1; }
 .step.on.now { box-shadow: 0 0 0 2px var(--panel), 0 0 0 3px var(--accent); }
+/* velocity: ghost dims the fill, accent adds a halo ring — independent of
+   the "now" playhead box-shadow, and independent of probability's opacity */
+.step.on.ghost { background: var(--accent-dim); border-color: var(--accent-dim); }
+.step.on.accent { outline: 2px solid rgba(232, 230, 225, 0.55); outline-offset: 1px; }
 
 .level {
   -webkit-appearance: none;
@@ -393,7 +433,7 @@ button:focus-visible, input:focus-visible, select:focus-visible, a:focus-visible
 }
 
 @media (prefers-reduced-motion: reduce) {
-  * { transition: none !important; }
+  * { transition: none !important; animation: none !important; }
 }
 
 /* ---------- responsive ---------- */
@@ -413,4 +453,5 @@ button:focus-visible, input:focus-visible, select:focus-visible, a:focus-visible
   .tool-group { flex-wrap: wrap; }
   .tool-group:last-child { margin-left: 0; }
   .tool-btn { padding: 8px 10px; }
+  .banks-hint { display: none; }
 }

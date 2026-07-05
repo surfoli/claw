@@ -40,6 +40,9 @@ No build step. No dependencies. Vanilla HTML/CSS/JS.
 | Toggle a drum step | click it |
 | Toggle a note step (BASS/ACID/STAB) | click it |
 | Change the note | shift-click or right-click — walks up the A-minor pentatonic |
+| Change velocity (normal/accent/ghost) | alt-click a lit step |
+| Change probability (100/75/50/25%) | scroll/wheel over a lit step |
+| Switch pattern bank (A–D) | click a bank button — instant when stopped, queued to the next bar when playing |
 | Play / stop | space bar or the orange button |
 | Mute a track | the small circle left of the steps |
 
