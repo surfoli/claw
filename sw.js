@@ -2,7 +2,7 @@
    visit. Release checklist: bump CACHE on every release or users keep the old
    version forever. */
 
-const CACHE = "claw-v0.2.0";
+const CACHE = "claw-v0.3.0";
 const CORE = [
   "./",
   "./index.html",
