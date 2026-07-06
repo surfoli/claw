@@ -43,8 +43,11 @@ No build step. No dependencies. Vanilla HTML/CSS/JS.
 | Change velocity (normal/accent/ghost) | alt-click a lit step |
 | Change probability (100/75/50/25%) | scroll/wheel over a lit step |
 | Switch pattern bank (A–D) | click a bank button — instant when stopped, queued to the next bar when playing |
+| Mixer: pan, solo, delay/reverb sends | open the **MIX** drawer |
 | Play / stop | space bar or the orange button |
 | Mute a track | the small circle left of the steps |
+
+The **MIX** drawer gives every track a channel strip (solo, pan, and sends to a tempo-synced dub delay and a procedural reverb — both synthesized, still zero samples). Reverb decay and delay feedback are global. It exports exactly what you hear, wet tails and all.
 
 ## Using AI generation
 

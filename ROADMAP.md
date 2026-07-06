@@ -30,11 +30,11 @@ Progress is tracked in issues; ship order matters more than ship dates.
 
 ## v0.4 — Sound: mixer, FX, parametric voices, p-locks (3–4 weeks)
 
-- [ ] Channel strips: pan, solo (level + mute exist)
-- [ ] FX sends: tempo-synced feedback delay + generated-IR reverb (zero samples), longer export tail
-- [ ] Named, clamped params per voice (kick {tune, decay, click}, acid {cutoff, reso, envMod, slide}, …) + per-track sound page; 303 slide
-- [ ] Elektron-style p-locks: per-step param overrides
-- [ ] AI sound designer: "describe a kick, get a kick" (params JSON through the existing BYO-key plumbing)
+- [x] Channel strips: pan + solo (level + mute existed) — a collapsible MIXER drawer
+- [x] FX sends: tempo-synced (dotted-⅛) feedback delay + procedural-IR reverb (zero samples), per-track sends, longer export tail that folds wet tails into the loop seam
+- [ ] Named, clamped params per voice (kick {tune, decay, click}, acid {cutoff, reso, envMod, slide}, …) + per-track sound page; 303 slide — **Part B, next**
+- [ ] Elektron-style p-locks: per-step param overrides — Part B
+- [ ] AI sound designer: "describe a kick, get a kick" (params JSON through the existing BYO-key plumbing) — Part B
 
 ## v0.5 — Studio I/O + ecosystem (2–3 weeks)
 

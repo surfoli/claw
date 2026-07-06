@@ -171,7 +171,28 @@
     },
   };
 
-  // Master chain factory: returns { input, filter, gain } wired to ctx.destination
+  // Procedural reverb impulse: a decaying stereo noise burst. No samples —
+  // the whole point of CLAW. `decay` sets the exponential falloff shape.
+  function makeIR(ctx, seconds, decay) {
+    const rate = ctx.sampleRate;
+    const len = Math.max(1, Math.floor(rate * seconds));
+    const ir = ctx.createBuffer(2, len, rate);
+    for (let ch = 0; ch < 2; ch++) {
+      const d = ir.getChannelData(ch);
+      for (let i = 0; i < len; i++) {
+        d[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / len, decay);
+      }
+    }
+    return ir;
+  }
+
+  // Master chain factory. Returns the dry sum bus plus two send buses (a
+  // tempo-synced feedback delay and a convolution reverb) that tracks feed
+  // into. Both returns run through the master filter, so a filter sweep pulls
+  // the wet tails down too — exactly what you want for a breakdown.
+  // Signal: [tracks] -> input ---------------\
+  //         [tracks] -> delayIn -> delay ----> filter -> gain -> comp -> out
+  //         [tracks] -> reverbIn -> convolver /
   function masterChain(ctx) {
     const input = ctx.createGain();
     const filter = ctx.createBiquadFilter();
@@ -185,9 +206,30 @@
     comp.ratio.value = 4;
     comp.attack.value = 0.003;
     comp.release.value = 0.18;
-    input.connect(filter).connect(gain).connect(comp).connect(ctx.destination);
-    return { input, filter, gain };
+    input.connect(filter);
+    filter.connect(gain).connect(comp).connect(ctx.destination);
+
+    // --- delay send bus (dub-style dotted-eighth, feedback loop) ---
+    const delayIn = ctx.createGain();
+    const delay = ctx.createDelay(1.0); // max 1s covers dotted-8th down to 60 BPM
+    delay.delayTime.value = 0.35;
+    const fb = ctx.createGain();
+    fb.gain.value = 0.35;
+    const damp = ctx.createBiquadFilter(); // tame the feedback so it decays musically
+    damp.type = "highpass";
+    damp.frequency.value = 280;
+    delayIn.connect(delay);
+    delay.connect(damp).connect(fb).connect(delay); // feedback
+    delay.connect(filter);                          // wet return
+
+    // --- reverb send bus (procedural IR) ---
+    const reverbIn = ctx.createGain();
+    const convolver = ctx.createConvolver();
+    convolver.buffer = makeIR(ctx, 2.4, 2.5);
+    reverbIn.connect(convolver).connect(filter);
+
+    return { input, filter, gain, delayIn, delay, fb, reverbIn, convolver };
   }
 
-  window.ClawSynth = { voices, masterChain, midiHz };
+  window.ClawSynth = { voices, masterChain, makeIR, midiHz };
 })();

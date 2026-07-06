@@ -28,7 +28,7 @@
   <div class="chassis-meta">
     <span>LOOP MACHINE</span>
     <span class="meta-dot" aria-hidden="true"></span>
-    <span>FIRMWARE 0.3.0</span>
+    <span>FIRMWARE 0.4.0</span>
     <span class="meta-dot" aria-hidden="true"></span>
     <span>44.1 kHz</span>
   </div>
@@ -111,8 +111,27 @@
       <button class="tool-btn" id="share">COPY LINK</button>
     </div>
     <div class="tool-group">
+      <button class="tool-btn" id="mix-toggle" aria-expanded="false">MIX ⌄</button>
       <button class="tool-btn tool-btn--ai" id="ai-toggle" aria-expanded="false">AI ⌄</button>
     </div>
+  </section>
+
+  <!-- Mixer + FX drawer (strips built by JS) -->
+  <section class="mixer-drawer" id="mixer-drawer" hidden aria-label="Mixer and effects">
+    <div class="fx-globals">
+      <div class="param">
+        <label class="silk" for="fx-decay">REVERB DECAY</label>
+        <input id="fx-decay" type="range" min="0" max="100" value="60">
+        <span class="param-readout" id="fx-decay-val">3.2 s</span>
+      </div>
+      <div class="param">
+        <label class="silk" for="fx-fb">DELAY FEEDBACK</label>
+        <input id="fx-fb" type="range" min="0" max="100" value="35">
+        <span class="param-readout" id="fx-fb-val">35%</span>
+      </div>
+      <p class="mixer-hint silk">Delay is dotted-⅛, locked to BPM. Sends per track below.</p>
+    </div>
+    <div class="strips" id="strips"></div>
   </section>
 
   <!-- AI drawer -->

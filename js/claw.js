@@ -93,12 +93,22 @@
     pattern: null, // set below — always the same object reference as banks[activeBank].pattern
     mutes: {},
     levels: {},
+    pans: {},    // -100..100 (L..R)
+    solos: {},   // bool — if any track is soloed, only soloed tracks sound
+    sends: {},   // { delay: 0..100, reverb: 0..100 } per track
+    fx: { delayFb: 35, reverbSend: 0, reverbDecay: 60 }, // global FX character (0..100)
     // remix provenance: gen counts edited-then-reshared hops, parent is the
     // 8-hex pattern hash this loop was remixed from
     meta: { gen: 0, parent: null, src: "hand" },
   };
   state.pattern = state.banks[state.activeBank].pattern;
-  TRACKS.forEach((t) => { state.mutes[t.id] = false; state.levels[t.id] = 0.8; });
+  TRACKS.forEach((t) => {
+    state.mutes[t.id] = false;
+    state.levels[t.id] = 0.8;
+    state.pans[t.id] = 0;
+    state.solos[t.id] = false;
+    state.sends[t.id] = { delay: 0, reverb: 0 };
+  });
 
   // set when the session started from a shared link — the remix chain anchor
   let arrival = null;
@@ -140,6 +150,16 @@
 
   const gridEl = document.getElementById("grid");
   const stepEls = {}; // trackId -> [button]
+  const rowEls = {};  // trackId -> track row div (for solo/mute dimming)
+
+  // a track is silenced by an explicit mute, or by another track being soloed
+  function anySolo() { return TRACKS.some((t) => state.solos[t.id]); }
+  function isSilenced(id) { return state.mutes[id] || (anySolo() && !state.solos[id]); }
+  function refreshRowStates() {
+    TRACKS.forEach((t) => {
+      if (rowEls[t.id]) rowEls[t.id].classList.toggle("muted-row", isSilenced(t.id));
+    });
+  }
 
   function noteName(midi) {
     const names = ["A","A#","B","C","C#","D","D#","E","F","F#","G","G#"];
@@ -151,6 +171,7 @@
     TRACKS.forEach((t, ti) => {
       const row = document.createElement("div");
       row.className = "track";
+      rowEls[t.id] = row;
 
       const name = document.createElement("div");
       name.className = "track-name";
@@ -161,12 +182,11 @@
       mute.className = "mute-btn" + (state.mutes[t.id] ? " muted" : "");
       mute.setAttribute("aria-label", `Mute ${t.name}`);
       mute.setAttribute("aria-pressed", String(state.mutes[t.id]));
-      row.classList.toggle("muted-row", state.mutes[t.id]);
       mute.addEventListener("click", () => {
         state.mutes[t.id] = !state.mutes[t.id];
         mute.classList.toggle("muted", state.mutes[t.id]);
         mute.setAttribute("aria-pressed", String(state.mutes[t.id]));
-        row.classList.toggle("muted-row", state.mutes[t.id]);
+        refreshRowStates();
         autosave();
       });
       row.appendChild(mute);
@@ -195,13 +215,13 @@
       level.addEventListener("input", () => {
         state.levels[t.id] = level.value / 100;
         level.title = `${t.name} level ${level.value} — double-click resets`;
-        if (buses) buses[t.id].gain.setTargetAtTime(state.levels[t.id], ctx.currentTime, 0.02);
+        if (buses) buses[t.id].gain.gain.setTargetAtTime(state.levels[t.id], ctx.currentTime, 0.02);
         autosave();
       });
       level.addEventListener("dblclick", () => {
         level.value = 80;
         state.levels[t.id] = 0.8;
-        if (buses) buses[t.id].gain.setTargetAtTime(0.8, ctx.currentTime, 0.02);
+        if (buses) buses[t.id].gain.gain.setTargetAtTime(0.8, ctx.currentTime, 0.02);
         autosave();
       });
       row.appendChild(level);
@@ -209,6 +229,7 @@
       gridEl.appendChild(row);
     });
     paintGrid();
+    refreshRowStates();
   }
 
   function onStepClick(t, s, ev) {
@@ -279,26 +300,60 @@
   let timerId = null;
   const notesInQueue = [];
 
-  // per-track gain buses: the channel-strip seam that pan/solo/FX sends will
-  // plug into later — voices never connect to the master input directly
+  // per-track channel strips: voices -> gain(level) -> pan -> master.input (dry)
+  //                                                        -> sendDelay -> master.delayIn
+  //                                                        -> sendReverb -> master.reverbIn
+  // Voices connect to `.gain`; the rest of the strip is the mixer.
   let buses = null;
+  const sendScale = (v) => (v / 100) * 1.2; // a little headroom so full send is audibly wet
   function makeBuses(c, m) {
     const b = {};
     TRACKS.forEach((t) => {
-      b[t.id] = c.createGain();
-      b[t.id].gain.value = state.levels[t.id];
-      b[t.id].connect(m.input);
+      const gain = c.createGain();
+      gain.gain.value = state.levels[t.id];
+      const pan = c.createStereoPanner();
+      pan.pan.value = state.pans[t.id] / 100;
+      gain.connect(pan);
+      pan.connect(m.input);
+      const sendDelay = c.createGain();
+      sendDelay.gain.value = sendScale(state.sends[t.id].delay);
+      pan.connect(sendDelay).connect(m.delayIn);
+      const sendReverb = c.createGain();
+      sendReverb.gain.value = sendScale(state.sends[t.id].reverb);
+      pan.connect(sendReverb).connect(m.reverbIn);
+      b[t.id] = { gain, pan, sendDelay, sendReverb };
     });
     return b;
+  }
+
+  function reverbSeconds(v) { return 0.4 + (v / 100) * 4.6; } // 0.4s..5s
+
+  // apply the global FX character to the live master chain
+  function applyFx() {
+    if (!master) return;
+    master.delay.delayTime.setTargetAtTime(delayTimeSec(), ctx.currentTime, 0.05);
+    master.fb.gain.setTargetAtTime((state.fx.delayFb / 100) * 0.85, ctx.currentTime, 0.02);
+    // reverb decay changes rebuild the IR — do it only when the value moves
+    if (master._reverbDecay !== state.fx.reverbDecay) {
+      master.convolver.buffer = window.ClawSynth.makeIR(ctx, reverbSeconds(state.fx.reverbDecay), 2.5);
+      master._reverbDecay = state.fx.reverbDecay;
+    }
+  }
+
+  function delayTimeSec() {
+    // dotted-eighth = 3 sixteenths, the classic dub-delay sync
+    return Math.min(1.0, (60 / state.bpm) * 0.75);
   }
 
   function ensureCtx() {
     if (!ctx) {
       ctx = new (window.AudioContext || window.webkitAudioContext)();
       master = masterChain(ctx);
+      master._reverbDecay = null; // force applyFx() to build the IR from state on init
       buses = makeBuses(ctx, master);
       applyFilter();
       applyVolume();
+      applyFx();
     }
     if (ctx.state === "suspended") ctx.resume();
   }
@@ -316,21 +371,23 @@
   // rollProb is injected so exportWav can render deterministically (always
   // hit) while live playback rolls the dice per repeat, per step.
   function triggerStep(c, b, step, time, spb, rollProb) {
+    const anySolo = TRACKS.some((t) => state.solos[t.id]);
     TRACKS.forEach((t) => {
       const cell = state.pattern[t.id][step];
       if (!cell || state.mutes[t.id]) return;
+      if (anySolo && !state.solos[t.id]) return; // solo silences everything else
       const prob = cellProb(cell);
       if (prob < 100 && rollProb && !rollProb(prob)) return;
       const stepVel = cellVel(cell);
       if (t.type === "drum") {
-        voices[t.id](c, b[t.id], time, stepVel);
+        voices[t.id](c, b[t.id].gain, time, stepVel);
       } else {
         // deliberate since v0.2: quarter-step vel 0.95 drives the acid accent
         // branch (higher Q + cutoff) — in v0.1 velocity was scaled by track
         // level, which silenced the accent unintentionally. A per-step accent
         // (stepVel 1.15) can now push any acid step over that threshold too.
         const baseVel = t.id === "acid" && step % 4 === 0 ? 0.95 : 0.8;
-        voices[t.id](c, b[t.id], time, baseVel * stepVel, cellNote(cell), spb * (t.id === "stab" ? 2 : 0.9));
+        voices[t.id](c, b[t.id].gain, time, baseVel * stepVel, cellNote(cell), spb * (t.id === "stab" ? 2 : 0.9));
       }
     });
   }
@@ -570,6 +627,7 @@
     const bpm = STYLES[style](state.pattern);
     state.bpm = bpm;
     bpmInput.value = bpm;
+    if (master) applyFx(); // tempo changed → re-sync the dub delay
     // fresh material: the remix chain starts over
     state.meta = { gen: 0, parent: null, src: "gen" };
     arrival = null;
@@ -690,7 +748,7 @@ Use rests — silence is part of the groove.`;
       for (let s = 0; s < STEPS; s++) arr.push(sanitizeCell(src[s], t));
       state.pattern[t.id] = arr;
     });
-    if (data.bpm) { state.bpm = Math.min(200, Math.max(60, data.bpm | 0)); bpmInput.value = state.bpm; }
+    if (data.bpm) { state.bpm = Math.min(200, Math.max(60, data.bpm | 0)); bpmInput.value = state.bpm; if (master) applyFx(); }
     if (data.swing != null) {
       state.swing = Math.min(60, Math.max(0, data.swing | 0));
       swingInput.value = state.swing;
@@ -712,7 +770,9 @@ Use rests — silence is part of the groove.`;
     const bars = 2;
     const spb = secondsPerStep();
     const dur = spb * STEPS * bars;
-    const tail = 1.0; // extra render so ringing voices aren't cut at the seam
+    // tail must outlast the wet FX so reverb/delay decay folds back into the
+    // loop start cleanly instead of getting chopped mid-tail
+    const tail = Math.min(6, reverbSeconds(state.fx.reverbDecay) + 1.5);
     const sr = 44100;
     const durSamples = Math.round(dur * sr);
     const off = new OfflineAudioContext(2, durSamples + Math.ceil(tail * sr), sr);
@@ -720,19 +780,25 @@ Use rests — silence is part of the groove.`;
     const ob = makeBuses(off, m);
     m.filter.frequency.value = filterFreq();
     m.gain.gain.value = state.volume / 100;
+    // match the live FX character in the render
+    m.delay.delayTime.value = delayTimeSec();
+    m.fb.gain.value = (state.fx.delayFb / 100) * 0.85;
+    m.convolver.buffer = window.ClawSynth.makeIR(off, reverbSeconds(state.fx.reverbDecay), 2.5);
     for (let bar = 0; bar < bars; bar++) {
       for (let s = 0; s < STEPS; s++) {
         triggerStep(off, ob, s, swungTime(bar * STEPS * spb + s * spb, s, spb), spb, rollProb);
       }
     }
     const buf = await off.startRendering();
-    // fold the tail back onto the loop start — the seam plays seamlessly
+    // fold the tail back onto the loop start so the seam plays seamlessly.
+    // The FX tail can now be LONGER than one loop, so wrap-accumulate with
+    // modulo — a plain out[i] would write past the array and drop the tail.
     const chans = [];
     for (let c = 0; c < buf.numberOfChannels; c++) {
       const src = buf.getChannelData(c);
       const out = new Float32Array(durSamples);
       out.set(src.subarray(0, durSamples));
-      for (let i = 0; i < src.length - durSamples; i++) out[i] += src[durSamples + i];
+      for (let i = 0; i < src.length - durSamples; i++) out[i % durSamples] += src[durSamples + i];
       chans.push(out);
     }
     const name = loopName().toLowerCase();
@@ -820,6 +886,8 @@ Use rests — silence is part of the groove.`;
       banks: state.banks.map((b) => ({ pattern: b.pattern })),
       activeBank: state.activeBank,
       levels: state.levels, mutes: state.mutes,
+      // v0.4 mixer/FX — additive fields, format version stays 1
+      pans: state.pans, solos: state.solos, sends: state.sends, fx: state.fx,
       meta: { name: loopName(), gen: state.meta.gen, parent: state.meta.parent, src: state.meta.src },
     };
   }
@@ -869,17 +937,44 @@ Use rests — silence is part of the groove.`;
     if (data.mutes && typeof data.mutes === "object") {
       TRACKS.forEach((t) => { state.mutes[t.id] = !!data.mutes[t.id]; });
     }
+    // v0.4 mixer/FX — all optional, absent fields keep their defaults
+    TRACKS.forEach((t) => {
+      state.pans[t.id] = data.pans && data.pans[t.id] != null ? clampInt(data.pans[t.id], -100, 100, 0) : 0;
+      state.solos[t.id] = !!(data.solos && data.solos[t.id]);
+      const sd = data.sends && data.sends[t.id];
+      state.sends[t.id] = {
+        delay: sd ? clampInt(sd.delay, 0, 100, 0) : 0,
+        reverb: sd ? clampInt(sd.reverb, 0, 100, 0) : 0,
+      };
+    });
+    const fx = data.fx && typeof data.fx === "object" ? data.fx : {};
+    state.fx = {
+      delayFb: clampInt(fx.delayFb, 0, 100, 35),
+      reverbSend: clampInt(fx.reverbSend, 0, 100, 0),
+      reverbDecay: clampInt(fx.reverbDecay, 0, 100, 60),
+    };
     const m = data.meta && typeof data.meta === "object" ? data.meta : {};
     state.meta = {
       gen: clampInt(m.gen, 0, 9999, 0),
       parent: typeof m.parent === "string" ? m.parent.slice(0, 8) : null,
       src: src || (typeof m.src === "string" ? m.src.slice(0, 8) : "hand"),
     };
-    // keep live playback in sync: loaded levels must reach the buses too,
-    // or what you hear diverges from what you'd export
-    if (buses) {
-      TRACKS.forEach((t) => buses[t.id].gain.setTargetAtTime(state.levels[t.id], ctx.currentTime, 0.02));
-    }
+    // keep live playback in sync: loaded mixer/FX settings must reach the
+    // audio graph too, or what you hear diverges from what you'd export
+    pushAllBusParams();
+  }
+
+  // shove every mixer param from state onto the live audio graph
+  function pushAllBusParams() {
+    if (!buses) return;
+    const now = ctx.currentTime;
+    TRACKS.forEach((t) => {
+      buses[t.id].gain.gain.setTargetAtTime(state.levels[t.id], now, 0.02);
+      buses[t.id].pan.pan.setTargetAtTime(state.pans[t.id] / 100, now, 0.02);
+      buses[t.id].sendDelay.gain.setTargetAtTime(sendScale(state.sends[t.id].delay), now, 0.02);
+      buses[t.id].sendReverb.gain.setTargetAtTime(sendScale(state.sends[t.id].reverb), now, 0.02);
+    });
+    applyFx();
   }
 
   function syncTransportUI() {
@@ -965,6 +1060,7 @@ Use rests — silence is part of the groove.`;
         buildGrid();
         syncTransportUI();
         paintBankButtons();
+        syncMixerUI();
         autosave();
         toast(`Loaded ${loopName()}`);
       } catch {
@@ -1002,12 +1098,14 @@ Use rests — silence is part of the groove.`;
   bpmInput.addEventListener("change", () => {
     state.bpm = Math.min(200, Math.max(60, +bpmInput.value || 128));
     bpmInput.value = state.bpm;
+    if (master) applyFx(); // the dub delay is tempo-synced
     autosave();
   });
   document.querySelectorAll("[data-bpm]").forEach((b) =>
     b.addEventListener("click", () => {
       state.bpm = Math.min(200, Math.max(60, state.bpm + +b.dataset.bpm));
       bpmInput.value = state.bpm;
+      if (master) applyFx();
       autosave();
     })
   );
@@ -1074,6 +1172,139 @@ Use rests — silence is part of the groove.`;
     aiToggle.setAttribute("aria-expanded", String(open));
     aiToggle.textContent = open ? "AI ⌃" : "AI ⌄";
   });
+
+  // ---------- mixer + FX drawer ----------
+
+  const mixerDrawer = document.getElementById("mixer-drawer");
+  const mixToggle = document.getElementById("mix-toggle");
+  const stripsEl = document.getElementById("strips");
+  const fxDecay = document.getElementById("fx-decay");
+  const fxDecayVal = document.getElementById("fx-decay-val");
+  const fxFb = document.getElementById("fx-fb");
+  const fxFbVal = document.getElementById("fx-fb-val");
+  let mixerBuilt = false;
+
+  mixToggle.addEventListener("click", () => {
+    const open = mixerDrawer.hidden;
+    mixerDrawer.hidden = !open;
+    mixToggle.setAttribute("aria-expanded", String(open));
+    mixToggle.textContent = open ? "MIX ⌃" : "MIX ⌄";
+    // first open builds fresh from state; later opens resync (rebuild)
+    if (open) {
+      if (!mixerBuilt) { buildMixer(); mixerBuilt = true; } else { syncMixerUI(); }
+    }
+  });
+
+  fxDecay.addEventListener("input", () => {
+    state.fx.reverbDecay = +fxDecay.value;
+    fxDecayVal.textContent = reverbSeconds(state.fx.reverbDecay).toFixed(1) + " s";
+    if (master) applyFx();
+    autosave();
+  });
+  fxFb.addEventListener("input", () => {
+    state.fx.delayFb = +fxFb.value;
+    fxFbVal.textContent = state.fx.delayFb + "%";
+    if (master) applyFx();
+    autosave();
+  });
+
+  // one compact channel strip per track: SOLO · PAN · DLY send · RVB send
+  const stripEls = {}; // trackId -> { solo, pan, dly, rvb }
+  function buildMixer() {
+    stripsEl.innerHTML = "";
+    TRACKS.forEach((t) => {
+      const strip = document.createElement("div");
+      strip.className = "strip";
+
+      const label = document.createElement("span");
+      label.className = "strip-name silk";
+      label.textContent = t.name;
+      strip.appendChild(label);
+
+      const solo = document.createElement("button");
+      solo.className = "solo-btn" + (state.solos[t.id] ? " on" : "");
+      solo.textContent = "S";
+      solo.setAttribute("aria-label", `Solo ${t.name}`);
+      solo.setAttribute("aria-pressed", String(state.solos[t.id]));
+      solo.addEventListener("click", () => {
+        state.solos[t.id] = !state.solos[t.id];
+        solo.classList.toggle("on", state.solos[t.id]);
+        solo.setAttribute("aria-pressed", String(state.solos[t.id]));
+        refreshRowStates();
+        autosave();
+      });
+      strip.appendChild(solo);
+
+      strip.appendChild(makeStripKnob("PAN", -100, 100, state.pans[t.id],
+        (v) => {
+          state.pans[t.id] = v;
+          if (buses) buses[t.id].pan.pan.setTargetAtTime(v / 100, ctx.currentTime, 0.02);
+          autosave();
+        },
+        (v) => (v === 0 ? "C" : (v < 0 ? "L" : "R") + Math.abs(v)), 0));
+
+      strip.appendChild(makeStripKnob("DLY", 0, 100, state.sends[t.id].delay,
+        (v) => {
+          state.sends[t.id].delay = v;
+          if (buses) buses[t.id].sendDelay.gain.setTargetAtTime(sendScale(v), ctx.currentTime, 0.02);
+          autosave();
+        },
+        (v) => v + "%", 0));
+
+      strip.appendChild(makeStripKnob("RVB", 0, 100, state.sends[t.id].reverb,
+        (v) => {
+          state.sends[t.id].reverb = v;
+          if (buses) buses[t.id].sendReverb.gain.setTargetAtTime(sendScale(v), ctx.currentTime, 0.02);
+          autosave();
+        },
+        (v) => v + "%", 0));
+
+      stripsEl.appendChild(strip);
+      stripEls[t.id] = strip;
+    });
+  }
+
+  function makeStripKnob(name, min, max, value, onChange, fmt, resetTo) {
+    const wrap = document.createElement("div");
+    wrap.className = "strip-ctl";
+    const lab = document.createElement("label");
+    lab.className = "silk strip-ctl-label";
+    lab.textContent = name;
+    const input = document.createElement("input");
+    input.type = "range";
+    input.min = min; input.max = max; input.value = value;
+    input.className = "strip-slider";
+    input.dataset.ctl = name;
+    input.setAttribute("aria-label", name);
+    const read = document.createElement("span");
+    read.className = "strip-read";
+    read.textContent = fmt(value);
+    input.addEventListener("input", () => {
+      const v = +input.value;
+      read.textContent = fmt(v);
+      onChange(v);
+    });
+    input.addEventListener("dblclick", () => {
+      input.value = resetTo;
+      read.textContent = fmt(resetTo);
+      onChange(resetTo);
+    });
+    wrap.appendChild(lab);
+    wrap.appendChild(input);
+    wrap.appendChild(read);
+    return wrap;
+  }
+
+  // repaint the whole mixer drawer from state (after load/share arrival).
+  // Rebuilding the strips is cheap (8 rows) and reads every value fresh from
+  // state, so there's no slider/readout desync to chase.
+  function syncMixerUI() {
+    fxDecay.value = state.fx.reverbDecay;
+    fxDecayVal.textContent = reverbSeconds(state.fx.reverbDecay).toFixed(1) + " s";
+    fxFb.value = state.fx.delayFb;
+    fxFbVal.textContent = state.fx.delayFb + "%";
+    if (mixerBuilt) buildMixer();
+  }
 
   document.getElementById("ai-provider").addEventListener("change", (e) => {
     const isOpenai = e.target.value === "openai";
