@@ -460,6 +460,25 @@ input[type="range"]:hover::-moz-range-thumb { background: #ffffff; }
 .strip-slider { width: 100% !important; height: 18px; }
 .strip-read { font-size: 10px; color: #e8e6e1; }
 
+/* ---------- sound-design drawer ---------- */
+
+.sound-drawer {
+  margin-top: 16px;
+  border-top: 1px dashed var(--panel-edge);
+  padding-top: 16px;
+}
+.sound-drawer .mixer-hint { display: block; padding-bottom: 12px; }
+
+/* voices have 2–3 params, so lay each strip out with flex, not a fixed grid */
+.strip--sound {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+.strip--sound .strip-name { width: 52px; flex: none; color: #e8e6e1; }
+.strip--sound .strip-ctl { flex: 1 1 80px; }
+
 /* ---------- toast ---------- */
 
 .toast {

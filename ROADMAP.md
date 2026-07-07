@@ -32,9 +32,11 @@ Progress is tracked in issues; ship order matters more than ship dates.
 
 - [x] Channel strips: pan + solo (level + mute existed) — a collapsible MIXER drawer
 - [x] FX sends: tempo-synced (dotted-⅛) feedback delay + procedural-IR reverb (zero samples), per-track sends, longer export tail that folds wet tails into the loop seam
-- [ ] Named, clamped params per voice (kick {tune, decay, click}, acid {cutoff, reso, envMod, slide}, …) + per-track sound page; 303 slide — **Part B, next**
-- [ ] Elektron-style p-locks: per-step param overrides — Part B
-- [ ] AI sound designer: "describe a kick, get a kick" (params JSON through the existing BYO-key plumbing) — Part B
+- [x] Named, clamped params per voice via a data-driven `VOICE_PARAMS` table (kick tune/decay/click, acid cutoff/reso/env-mod, bass cutoff/sub, …) + a SOUND drawer; defaults reproduce the original voices exactly
+- [x] Refactor: pattern generators extracted to `js/generators.js` (pure, seeded, no app-state) — the monolith gets thinner as it grows
+- [ ] 303 slide (glide between consecutive acid notes) — needs a per-step slide flag; deferred
+- [ ] Elektron-style p-locks: per-step param overrides — deferred
+- [ ] AI sound designer: "describe a kick, get a kick" (params JSON through the existing BYO-key plumbing) — deferred
 
 ## v0.5 — Studio I/O + ecosystem (2–3 weeks)
 

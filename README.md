@@ -49,6 +49,8 @@ No build step. No dependencies. Vanilla HTML/CSS/JS.
 
 The **MIX** drawer gives every track a channel strip (solo, pan, and sends to a tempo-synced dub delay and a procedural reverb — both synthesized, still zero samples). Reverb decay and delay feedback are global. It exports exactly what you hear, wet tails and all.
 
+The **SOUND** drawer is a sound-design page: every voice exposes named knobs (kick tune/decay/click, acid cutoff/reso/env-mod, bass cutoff/sub, …). Shape a kick into a boom or a click, open the 303 up, detune the stab. Double-click a knob to reset it. Each loop carries its own sound in the project/share link.
+
 ## Using AI generation
 
 1. Open the **AI** drawer (bottom right).

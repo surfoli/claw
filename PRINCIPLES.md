@@ -30,9 +30,12 @@ the principle wins.
 
 ## The code
 
-9. **Buildless, permanently.** Vanilla JS, no bundler, no TypeScript. The three
-   readable source files are the contributor onboarding. (`@ts-check` JSDoc and
-   `node --test` on pure functions are welcome; toolchains are not.)
+9. **Buildless, permanently.** Vanilla JS, no bundler, no TypeScript. Code is
+   split into a few classic `<script>` files sharing `window.Claw*` namespaces
+   (`ClawSynth`, `ClawGen`) — NOT ES modules, which don't load from `file://`.
+   Keep new modules pure where possible (no DOM/audio/state reach-in) so they
+   stay testable. (`@ts-check` JSDoc and `node --test` on pure functions are
+   welcome; toolchains are not.)
 10. **One format, one sanitizer.** Share links, project files, autosave, AI
     output, and future packs are the same versioned schema through the same
     clamping entry point. Old share URLs parse forever.

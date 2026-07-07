@@ -6,7 +6,14 @@
 (function () {
   "use strict";
 
-  const { voices, masterChain } = window.ClawSynth;
+  const { voices, masterChain, VOICE_PARAMS } = window.ClawSynth;
+
+  // default sound params for one track, straight from the metadata table
+  function defaultVoice(id) {
+    const o = {};
+    VOICE_PARAMS[id].forEach((m) => { o[m.k] = m.def; });
+    return o;
+  }
 
   // ---------- data model ----------
 
@@ -97,6 +104,7 @@
     solos: {},   // bool — if any track is soloed, only soloed tracks sound
     sends: {},   // { delay: 0..100, reverb: 0..100 } per track
     fx: { delayFb: 35, reverbSend: 0, reverbDecay: 60 }, // global FX character (0..100)
+    voice: {},   // per-track sound-design params, keyed per VOICE_PARAMS
     // remix provenance: gen counts edited-then-reshared hops, parent is the
     // 8-hex pattern hash this loop was remixed from
     meta: { gen: 0, parent: null, src: "hand" },
@@ -108,6 +116,7 @@
     state.pans[t.id] = 0;
     state.solos[t.id] = false;
     state.sends[t.id] = { delay: 0, reverb: 0 };
+    state.voice[t.id] = defaultVoice(t.id);
   });
 
   // set when the session started from a shared link — the remix chain anchor
@@ -379,15 +388,16 @@
       const prob = cellProb(cell);
       if (prob < 100 && rollProb && !rollProb(prob)) return;
       const stepVel = cellVel(cell);
+      const vp = state.voice[t.id]; // per-track sound-design params
       if (t.type === "drum") {
-        voices[t.id](c, b[t.id].gain, time, stepVel);
+        voices[t.id](c, b[t.id].gain, time, stepVel, 0, 0, vp);
       } else {
         // deliberate since v0.2: quarter-step vel 0.95 drives the acid accent
         // branch (higher Q + cutoff) — in v0.1 velocity was scaled by track
         // level, which silenced the accent unintentionally. A per-step accent
         // (stepVel 1.15) can now push any acid step over that threshold too.
         const baseVel = t.id === "acid" && step % 4 === 0 ? 0.95 : 0.8;
-        voices[t.id](c, b[t.id].gain, time, baseVel * stepVel, cellNote(cell), spb * (t.id === "stab" ? 2 : 0.9));
+        voices[t.id](c, b[t.id].gain, time, baseVel * stepVel, cellNote(cell), spb * (t.id === "stab" ? 2 : 0.9), vp);
       }
     });
   }
@@ -488,9 +498,12 @@
   }
 
   // ---------- algorithmic generators ----------
+  // The pattern-filling logic lives in js/generators.js (window.ClawGen) as
+  // pure functions; this file just wires them to state + the seeded rng.
 
   // seeded PRNG (mulberry32): generators are reproducible per seed, so future
-  // style packs can ship a seed and replay the exact same pattern
+  // style packs can ship a seed and replay the exact same pattern. rng also
+  // rolls per-step probability during playback.
   let rng = Math.random;
   function reseed() {
     let a = crypto.getRandomValues(new Uint32Array(1))[0];
@@ -503,8 +516,8 @@
     };
     return seed;
   }
-  const rnd = (n) => Math.floor(rng() * n);
-  const chance = (p) => rng() < p;
+  // the helpers bundle generators need — keeps ClawGen free of app-state access
+  const genHelpers = () => ({ STEPS, PENTA, TRACKS, withMods });
 
   // one-deep undo for every destructive pattern change (Ctrl/Cmd+Z)
   let undoBuf = null;
@@ -521,110 +534,10 @@
     toast("Undone");
   }
 
-  // Euclidean rhythm (Bresenham form): distribute k hits over n steps
-  function euclid(k, n, rot = 0) {
-    const out = new Array(n).fill(0);
-    if (k <= 0) return out;
-    for (let i = 0; i < n; i++) {
-      out[(i + rot) % n] = Math.floor(i * k / n) !== Math.floor((i - 1) * k / n) ? 1 : 0;
-    }
-    out[rot % n] = 1;
-    return out;
-  }
-
-  function pentaNote(root, range = 2) {
-    const oct = rnd(range) * 12;
-    return root + PENTA[rnd(PENTA.length - 1)] + oct;
-  }
-
-  function noteLine(root, density, mover) {
-    const line = new Array(STEPS).fill(0);
-    let cur = root;
-    for (let s = 0; s < STEPS; s++) {
-      if (chance(density)) {
-        if (chance(mover)) cur = pentaNote(root);
-        line[s] = cur;
-      }
-    }
-    return line;
-  }
-
-  // a few hats at ghost velocity reads as a human hand, not a demo loop
-  function ghostifyHats(arr) {
-    return arr.map((v) => (v && chance(0.4) ? withMods(1, 0.55, 100) : v));
-  }
-
-  const STYLES = {
-    techno(p) {
-      p.kick = [1,0,0,0, 1,0,0,0, 1,0,0,0, 1,0,0,0];
-      if (chance(0.4)) p.kick[14] = 1;
-      p.clap = [0,0,0,0, 1,0,0,0, 0,0,0,0, 1,0,0,0];
-      p.snare = chance(0.3) ? euclid(3, 16, 6).map((v, i) => (i > 11 && v ? 1 : 0)) : new Array(16).fill(0);
-      p.chh = ghostifyHats(euclid(10 + rnd(6), 16, rnd(2)));
-      p.ohh = [0,0,1,0, 0,0,1,0, 0,0,1,0, 0,0,1,0];
-      p.bass = noteLine(33, 0.45, 0.25);
-      p.acid = noteLine(45, 0.35 + rng() * 0.25, 0.5); // was Math.random() — now uses the seeded stream too
-      p.stab = new Array(16).fill(0);
-      if (chance(0.5)) p.stab[8 + rnd(4)] = 57;
-      return 128 + rnd(8);
-    },
-    house(p) {
-      p.kick = [1,0,0,0, 1,0,0,0, 1,0,0,0, 1,0,0,0];
-      p.clap = [0,0,0,0, 1,0,0,0, 0,0,0,0, 1,0,0,0];
-      p.snare = new Array(16).fill(0);
-      p.chh = [0,0,1,0, 0,0,1,0, 0,0,1,0, 0,0,1,0];
-      if (chance(0.5)) p.chh = p.chh.map((v, i) => (i % 2 === 0 && chance(0.3) ? 1 : v));
-      p.chh = ghostifyHats(p.chh);
-      p.ohh = [0,0,1,0, 0,0,1,0, 0,0,1,0, 0,0,1,1];
-      p.bass = new Array(16).fill(0);
-      [3, 6, 11, 14].forEach((s) => { if (chance(0.85)) p.bass[s] = pentaNote(33, 1); });
-      p.acid = new Array(16).fill(0);
-      p.stab = new Array(16).fill(0);
-      [2, 10].forEach((s) => { if (chance(0.7)) p.stab[s] = pentaNote(57, 1); });
-      return 122 + rnd(6);
-    },
-    acid(p) {
-      p.kick = [1,0,0,0, 1,0,0,0, 1,0,0,0, 1,0,0,0];
-      p.clap = [0,0,0,0, 1,0,0,0, 0,0,0,0, 1,0,0,0];
-      p.snare = new Array(16).fill(0);
-      p.chh = ghostifyHats(euclid(12 + rnd(4), 16));
-      p.ohh = [0,0,1,0, 0,0,1,0, 0,0,1,0, 0,0,1,0];
-      p.bass = new Array(16).fill(0);
-      // rolling 303 line: mostly 16ths, walks the scale, octave jumps
-      let cur = 45;
-      p.acid = new Array(16).fill(0).map(() => {
-        if (chance(0.78)) {
-          if (chance(0.4)) cur = pentaNote(45);
-          if (chance(0.15)) cur += 12;
-          if (cur > 69) cur -= 24;
-          return cur;
-        }
-        return 0;
-      });
-      p.stab = new Array(16).fill(0);
-      return 130 + rnd(10);
-    },
-    breaks(p) {
-      p.kick = new Array(16).fill(0);
-      [0, 7, 10].forEach((s) => { p.kick[s] = 1; });
-      if (chance(0.5)) p.kick[13] = 1;
-      p.snare = [0,0,0,0, 1,0,0,0, 0,0,0,0, 1,0,0,1];
-      p.clap = new Array(16).fill(0);
-      p.chh = ghostifyHats(euclid(8 + rnd(6), 16, 1));
-      p.ohh = new Array(16).fill(0);
-      if (chance(0.6)) p.ohh[6] = 1;
-      p.bass = noteLine(33, 0.4, 0.4);
-      p.acid = chance(0.4) ? noteLine(45, 0.3, 0.5) : new Array(16).fill(0);
-      p.stab = new Array(16).fill(0);
-      [1, 9].forEach((s) => { if (chance(0.5)) p.stab[s] = pentaNote(57, 1); });
-      return 136 + rnd(14);
-    },
-  };
-
   function generate(style) {
     snapshot();
     reseed();
-    const bpm = STYLES[style](state.pattern);
+    const bpm = window.ClawGen.generate(style, state.pattern, rng, genHelpers());
     state.bpm = bpm;
     bpmInput.value = bpm;
     if (master) applyFx(); // tempo changed → re-sync the dub delay
@@ -639,15 +552,8 @@
 
   function mutate() {
     snapshot();
-    TRACKS.forEach((t) => {
-      const arr = state.pattern[t.id];
-      const flips = rnd(3);
-      for (let i = 0; i < flips; i++) {
-        const s = rnd(STEPS);
-        if (t.type === "drum") arr[s] = arr[s] ? 0 : (chance(0.5) ? 1 : 0);
-        else arr[s] = arr[s] ? (chance(0.3) ? 0 : pentaNote(t.root)) : (chance(0.4) ? pentaNote(t.root) : 0);
-      }
-    });
+    reseed();
+    window.ClawGen.mutate(state.pattern, rng, genHelpers());
     paintGrid();
     autosave();
     toast("Pattern mutated");
@@ -886,8 +792,9 @@ Use rests — silence is part of the groove.`;
       banks: state.banks.map((b) => ({ pattern: b.pattern })),
       activeBank: state.activeBank,
       levels: state.levels, mutes: state.mutes,
-      // v0.4 mixer/FX — additive fields, format version stays 1
+      // v0.4 mixer/FX + sound-design — additive fields, format version stays 1
       pans: state.pans, solos: state.solos, sends: state.sends, fx: state.fx,
+      voice: state.voice,
       meta: { name: loopName(), gen: state.meta.gen, parent: state.meta.parent, src: state.meta.src },
     };
   }
@@ -953,6 +860,20 @@ Use rests — silence is part of the groove.`;
       reverbSend: clampInt(fx.reverbSend, 0, 100, 0),
       reverbDecay: clampInt(fx.reverbDecay, 0, 100, 60),
     };
+    // sound-design params: clamp each against its VOICE_PARAMS range, default
+    // any missing one — one data-driven pass, so adding a param can't desync
+    TRACKS.forEach((t) => {
+      // typeof null === "object", so guard null explicitly (a null voice entry
+      // must fall back to defaults, not throw and reject the whole project)
+      const vsrc = data.voice && data.voice[t.id];
+      const src = (vsrc && typeof vsrc === "object") ? vsrc : {};
+      const v = {};
+      VOICE_PARAMS[t.id].forEach((m) => {
+        const n = Number(src[m.k]);
+        v[m.k] = Number.isFinite(n) ? Math.min(m.max, Math.max(m.min, n)) : m.def;
+      });
+      state.voice[t.id] = v;
+    });
     const m = data.meta && typeof data.meta === "object" ? data.meta : {};
     state.meta = {
       gen: clampInt(m.gen, 0, 9999, 0),
@@ -1061,6 +982,7 @@ Use rests — silence is part of the groove.`;
         syncTransportUI();
         paintBankButtons();
         syncMixerUI();
+        syncSoundUI();
         autosave();
         toast(`Loaded ${loopName()}`);
       } catch {
@@ -1264,7 +1186,7 @@ Use rests — silence is part of the groove.`;
     });
   }
 
-  function makeStripKnob(name, min, max, value, onChange, fmt, resetTo) {
+  function makeStripKnob(name, min, max, value, onChange, fmt, resetTo, step = 1) {
     const wrap = document.createElement("div");
     wrap.className = "strip-ctl";
     const lab = document.createElement("label");
@@ -1272,7 +1194,9 @@ Use rests — silence is part of the groove.`;
     lab.textContent = name;
     const input = document.createElement("input");
     input.type = "range";
-    input.min = min; input.max = max; input.value = value;
+    // step BEFORE value: a range input sanitizes value against the current
+    // step, so a fractional default set while step is still 1 snaps to min
+    input.min = min; input.max = max; input.step = step; input.value = value;
     input.className = "strip-slider";
     input.dataset.ctl = name;
     input.setAttribute("aria-label", name);
@@ -1305,6 +1229,49 @@ Use rests — silence is part of the groove.`;
     fxFbVal.textContent = state.fx.delayFb + "%";
     if (mixerBuilt) buildMixer();
   }
+
+  // ---------- sound-design drawer ----------
+  // One strip per track, one knob per VOICE_PARAMS entry. Changes write into
+  // state.voice[id][k]; the next triggered step reads them — no live node to
+  // update, so it always matches what export renders.
+
+  const soundDrawer = document.getElementById("sound-drawer");
+  const soundToggle = document.getElementById("sound-toggle");
+  const soundStripsEl = document.getElementById("sound-strips");
+  let soundBuilt = false;
+
+  soundToggle.addEventListener("click", () => {
+    const open = soundDrawer.hidden;
+    soundDrawer.hidden = !open;
+    soundToggle.setAttribute("aria-expanded", String(open));
+    soundToggle.textContent = open ? "SOUND ⌃" : "SOUND ⌄";
+    if (open) {
+      if (!soundBuilt) { buildSound(); soundBuilt = true; } else { buildSound(); }
+    }
+  });
+
+  function buildSound() {
+    soundStripsEl.innerHTML = "";
+    TRACKS.forEach((t) => {
+      const strip = document.createElement("div");
+      strip.className = "strip strip--sound";
+      const label = document.createElement("span");
+      label.className = "strip-name silk";
+      label.textContent = t.name;
+      strip.appendChild(label);
+      VOICE_PARAMS[t.id].forEach((m) => {
+        // finer step for small ranges so short-decay defaults (e.g. chh 0.045)
+        // land exactly on the grid and stay reachable
+        const step = m.max <= 0.2 ? 0.005 : (m.max <= 5 ? 0.01 : 1);
+        strip.appendChild(makeStripKnob(m.label, m.min, m.max, state.voice[t.id][m.k],
+          (v) => { state.voice[t.id][m.k] = v; autosave(); },
+          m.fmt, m.def, step));
+      });
+      soundStripsEl.appendChild(strip);
+    });
+  }
+
+  function syncSoundUI() { if (soundBuilt) buildSound(); }
 
   document.getElementById("ai-provider").addEventListener("change", (e) => {
     const isOpenai = e.target.value === "openai";
