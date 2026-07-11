@@ -105,6 +105,8 @@
     sends: {},   // { delay: 0..100, reverb: 0..100 } per track
     fx: { delayFb: 35, reverbSend: 0, reverbDecay: 60 }, // global FX character (0..100)
     voice: {},   // per-track sound-design params, keyed per VOICE_PARAMS
+    mode: "loop",                        // "loop" jams one bank; "song" plays the arrangement
+    song: [{ bank: 0, repeats: 4 }],     // ordered rows: play bank N for `repeats` bars
     // remix provenance: gen counts edited-then-reshared hops, parent is the
     // 8-hex pattern hash this loop was remixed from
     meta: { gen: 0, parent: null, src: "hand" },
@@ -375,18 +377,26 @@
     return step % 2 === 1 ? base + (state.swing / 100) * spb * 0.5 : base;
   }
 
-  // THE single trigger path — live playback and offline export both call this,
-  // so what you hear is exactly what you export. Track level lives on the bus.
-  // rollProb is injected so exportWav can render deterministically (always
-  // hit) while live playback rolls the dice per repeat, per step.
-  function triggerStep(c, b, step, time, spb, rollProb) {
+  // THE single trigger path — live playback, WAV export, stem renders and the
+  // full-song render all call this, so what you hear is exactly what you get.
+  // opts: { rollProb, decide, pattern, only }
+  //   rollProb — live dice for per-step probability, rolled every pass
+  //   decide   — (trackId, step) => bool; a FIXED decision table, so one export
+  //              renders identical hits into the WAV, every stem, and the MIDI
+  //   pattern  — render a bank other than the live one (song export)
+  //   only     — render a single track id (stem export)
+  function triggerStep(c, b, step, time, spb, opts = {}) {
+    const pat = opts.pattern || state.pattern;
     const anySolo = TRACKS.some((t) => state.solos[t.id]);
     TRACKS.forEach((t) => {
-      const cell = state.pattern[t.id][step];
+      if (opts.only && t.id !== opts.only) return; // stems: one track per pass
+      const cell = pat[t.id][step];
       if (!cell || state.mutes[t.id]) return;
-      if (anySolo && !state.solos[t.id]) return; // solo silences everything else
+      // a stem pass renders its own track even if another track is soloed
+      if (!opts.only && anySolo && !state.solos[t.id]) return;
       const prob = cellProb(cell);
-      if (prob < 100 && rollProb && !rollProb(prob)) return;
+      if (opts.decide) { if (!opts.decide(t.id, step)) return; }
+      else if (prob < 100 && opts.rollProb && !opts.rollProb(prob)) return;
       const stepVel = cellVel(cell);
       const vp = state.voice[t.id]; // per-track sound-design params
       if (t.type === "drum") {
@@ -405,11 +415,14 @@
   const rollProb = (prob) => rng() * 100 < prob;
 
   function scheduleStep(step, time) {
-    if (step === 0 && queuedBank != null) applyBankSwitch(queuedBank);
+    if (step === 0) {
+      if (state.mode === "song") songTick();
+      else if (queuedBank != null) applyBankSwitch(queuedBank);
+    }
     const spb = secondsPerStep();
     const swung = swungTime(time, step, spb);
     notesInQueue.push({ step, time: swung });
-    triggerStep(ctx, buses, step, swung, spb, rollProb);
+    triggerStep(ctx, buses, step, swung, spb, { rollProb });
   }
 
   function scheduler() {
@@ -440,6 +453,10 @@
     ensureCtx();
     playing = true;
     currentStep = 0;
+    if (state.mode === "song" && state.song.length) {
+      songReset();
+      setActiveBank(state.song[0].bank); // start on the arrangement's first row
+    }
     nextNoteTime = ctx.currentTime + 0.06;
     timerId = setInterval(scheduler, 25);
     playBtn.classList.add("playing");
@@ -455,6 +472,7 @@
     TRACKS.forEach((t) => stepEls[t.id].forEach((el) => el.classList.remove("now")));
     playBtn.classList.remove("playing");
     playBtn.setAttribute("aria-pressed", "false");
+    highlightSong();
   }
 
   // ---------- pattern banks ----------
@@ -464,7 +482,10 @@
 
   function selectBank(i) {
     if (i === state.activeBank && queuedBank == null) return;
-    if (playing) {
+    // queuing is a LOOP-mode performance move. In song mode the arrangement
+    // owns the bank, so a click just moves the edit focus straight away —
+    // otherwise the queue would sit unused and later fire in loop mode.
+    if (playing && state.mode === "loop") {
       queuedBank = i;
     } else {
       applyBankSwitch(i);
@@ -472,18 +493,24 @@
     paintBankButtons();
   }
 
-  function applyBankSwitch(i) {
+  // move the edit/playback focus to a bank. Repaint, don't rebuild: track and
+  // step counts never change between banks, only cell contents — a full
+  // buildGrid() teardown can run inside the audio scheduler's tick and stall
+  // it right on the downbeat.
+  function setActiveBank(i) {
     state.banks[state.activeBank].pattern = state.pattern; // save edits back first
     state.activeBank = i;
     state.pattern = state.banks[i].pattern;
-    queuedBank = null;
     undoBuf = null; // undo history doesn't cross a bank switch
     if (playing) lastDrawnStep = -1;
-    // repaint, don't rebuild: track/step counts never change between banks,
-    // only cell contents — a full buildGrid() teardown here can run inside
-    // the audio scheduler's tick and risks stalling it right on the downbeat
     paintGrid();
     paintBankButtons();
+  }
+
+  // a user-initiated switch: also clears the queue and persists
+  function applyBankSwitch(i) {
+    setActiveBank(i);
+    queuedBank = null;
     autosave();
   }
 
@@ -496,6 +523,51 @@
       b.setAttribute("aria-pressed", String(i === state.activeBank));
     });
   }
+
+  // ---------- song arrangement ----------
+  // The song is a list of rows ("play bank B for 8 bars"). In SONG mode the
+  // playhead walks it and loops; EXPORT renders exactly one pass.
+
+  let songPos = 0, songBar = 0, songFirstBar = true;
+
+  function songReset() {
+    songPos = 0; songBar = 0; songFirstBar = true;
+  }
+
+  // called at the top of every bar while playing in song mode. Only toggles a
+  // class on the chips — never rebuilds them, since this runs inside the
+  // audio scheduler's tick.
+  function songTick() {
+    if (!state.song.length) return;
+    if (songFirstBar) { songFirstBar = false; highlightSong(); return; } // row 0 already active
+    songBar++;
+    if (songBar >= state.song[songPos].repeats) {
+      songBar = 0;
+      songPos = (songPos + 1) % state.song.length; // the arrangement loops
+      setActiveBank(state.song[songPos].bank);
+      highlightSong();
+    }
+  }
+
+  // one pattern reference per bar of the arrangement — what export walks
+  function songPatterns() {
+    const bars = [];
+    state.song.forEach((row) => {
+      for (let i = 0; i < row.repeats; i++) bars.push(state.banks[row.bank].pattern);
+    });
+    return bars;
+  }
+
+  // what WAV/stem/MIDI export should render: the whole song, or 2 bars of the loop
+  function renderBars() {
+    if (state.mode === "song") {
+      const bars = songPatterns();
+      if (bars.length) return bars;
+    }
+    return [state.pattern, state.pattern];
+  }
+
+  const songTotalBars = () => state.song.reduce((n, r) => n + r.repeats, 0);
 
   // ---------- algorithmic generators ----------
   // The pattern-filling logic lives in js/generators.js (window.ClawGen) as
@@ -668,16 +740,49 @@ Use rests — silence is part of the groove.`;
     autosave();
   }
 
-  // ---------- WAV export ----------
+  // ---------- export: WAV, stems, MIDI ----------
+  // All three walk the same bars and the same triggerStep, so a stem sums back
+  // into the mix and the MIDI lines up with the audio.
 
-  async function exportWav() {
-    bumpGenIfRemixed(); // the WAV's embedded URL must match what COPY LINK gives
-    toast("Rendering 2-bar loop…");
-    const bars = 2;
+  function download(blob, filename) {
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = filename;
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(a.href), 10000);
+  }
+
+  /* A bounce must be deterministic: roll every probabilistic step ONCE, seeded
+     from the material itself. The WAV, each stem and the MIDI then agree, and
+     exporting the same thing twice gives the same file. Live playback still
+     rolls fresh dice every pass — that's the point of probability. */
+  function exportDecisions(bars) {
+    let a = hash32(JSON.stringify(bars)) || 1;
+    const r = () => {
+      a |= 0; a = (a + 0x6d2b79f5) | 0;
+      let t = Math.imul(a ^ (a >>> 15), 1 | a);
+      t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+      return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+    };
+    return bars.map((pat) => {
+      const bar = {};
+      TRACKS.forEach((t) => {
+        bar[t.id] = pat[t.id].map((cell) => {
+          if (!cell) return false;
+          const p = cellProb(cell);
+          return p >= 100 ? true : r() * 100 < p;
+        });
+      });
+      return bar;
+    });
+  }
+
+  // render `bars` (one pattern reference per bar) offline; `only` isolates a
+  // single track for stem passes; `decisions` fixes the probability rolls
+  async function renderOffline(bars, only, decisions) {
     const spb = secondsPerStep();
-    const dur = spb * STEPS * bars;
-    // tail must outlast the wet FX so reverb/delay decay folds back into the
-    // loop start cleanly instead of getting chopped mid-tail
+    const dur = spb * STEPS * bars.length;
+    // tail must outlast the wet FX so reverb/delay decay isn't chopped
     const tail = Math.min(6, reverbSeconds(state.fx.reverbDecay) + 1.5);
     const sr = 44100;
     const durSamples = Math.round(dur * sr);
@@ -689,67 +794,116 @@ Use rests — silence is part of the groove.`;
     // match the live FX character in the render
     m.delay.delayTime.value = delayTimeSec();
     m.fb.gain.value = (state.fx.delayFb / 100) * 0.85;
-    m.convolver.buffer = window.ClawSynth.makeIR(off, reverbSeconds(state.fx.reverbDecay), 2.5);
-    for (let bar = 0; bar < bars; bar++) {
+    // fixed IR seed → identical reverb on the mix and every stem, and a
+    // re-export is byte-identical
+    m.convolver.buffer = window.ClawSynth.makeIR(off, reverbSeconds(state.fx.reverbDecay), 2.5, 0x51ee5eed);
+    bars.forEach((pat, bar) => {
+      const d = decisions[bar];
       for (let s = 0; s < STEPS; s++) {
-        triggerStep(off, ob, s, swungTime(bar * STEPS * spb + s * spb, s, spb), spb, rollProb);
+        const t = swungTime(bar * STEPS * spb + s * spb, s, spb);
+        triggerStep(off, ob, s, t, spb, { pattern: pat, only, decide: (id, st) => d[id][st] });
       }
-    }
+    });
     const buf = await off.startRendering();
-    // fold the tail back onto the loop start so the seam plays seamlessly.
-    // The FX tail can now be LONGER than one loop, so wrap-accumulate with
-    // modulo — a plain out[i] would write past the array and drop the tail.
+    return { buf, durSamples, sr };
+  }
+
+  // A loop must be seamless, so its FX tail wraps back onto the start (modulo:
+  // the tail can be longer than the loop). A song ends, so it keeps its tail.
+  function toChannels(buf, durSamples, fold) {
     const chans = [];
     for (let c = 0; c < buf.numberOfChannels; c++) {
       const src = buf.getChannelData(c);
+      if (!fold) { chans.push(new Float32Array(src)); continue; }
       const out = new Float32Array(durSamples);
       out.set(src.subarray(0, durSamples));
       for (let i = 0; i < src.length - durSamples; i++) out[i % durSamples] += src[durSamples + i];
       chans.push(out);
     }
+    return chans;
+  }
+
+  const isSong = () => state.mode === "song";
+  const trackHasNotes = (id, bars) => bars.some((pat) => pat[id].some(cellOn));
+
+  async function exportWav() {
+    bumpGenIfRemixed(); // the WAV's embedded URL must match what COPY LINK gives
+    const bars = renderBars();
+    toast(isSong() ? `Rendering ${bars.length}-bar song…` : "Rendering 2-bar loop…");
+    const { buf, durSamples, sr } = await renderOffline(bars, null, exportDecisions(bars));
+    const chans = toChannels(buf, durSamples, !isSong());
     const name = loopName().toLowerCase();
     const comment = `Made with CLAW — remix this exact loop: ${buildShareUrl(serializeProject())}`;
-    const blob = encodeWav(chans, sr, comment);
-    const a = document.createElement("a");
-    a.href = URL.createObjectURL(blob);
-    a.download = `claw-${name}-${state.bpm}bpm.wav`;
-    a.click();
-    setTimeout(() => URL.revokeObjectURL(a.href), 10000);
+    const blob = window.ClawExport.encodeWav(chans, sr, comment);
+    download(blob, `claw-${name}${isSong() ? "-song" : ""}-${state.bpm}bpm.wav`);
     toast(`Exported ${name.toUpperCase()} @ ${state.bpm} BPM`);
   }
 
-  function encodeWav(chans, sr, comment) {
-    const ch = chans.length, len = chans[0].length;
-    const dataBytes = len * ch * 2;
-    // LIST/INFO/ICMT chunk carries the share URL inside the file itself —
-    // the exported WAV is a carrier that can always find its way home
-    const cm = comment ? new TextEncoder().encode(comment) : null;
-    const cmLen = cm ? cm.length + 1 : 0;               // + null terminator
-    const cmPad = cm ? cmLen + (cmLen & 1) : 0;         // chunks are even-padded
-    const listBytes = cm ? 8 + 4 + 8 + cmPad : 0;       // LIST hdr + INFO + ICMT hdr + text
-    const bytes = 44 + dataBytes + listBytes;
-    const ab = new ArrayBuffer(bytes);
-    const dv = new DataView(ab);
-    const wstr = (o, s) => { for (let i = 0; i < s.length; i++) dv.setUint8(o + i, s.charCodeAt(i)); };
-    wstr(0, "RIFF"); dv.setUint32(4, bytes - 8, true); wstr(8, "WAVE");
-    wstr(12, "fmt "); dv.setUint32(16, 16, true); dv.setUint16(20, 1, true);
-    dv.setUint16(22, ch, true); dv.setUint32(24, sr, true);
-    dv.setUint32(28, sr * ch * 2, true); dv.setUint16(32, ch * 2, true); dv.setUint16(34, 16, true);
-    wstr(36, "data"); dv.setUint32(40, dataBytes, true);
-    let o = 44;
-    for (let i = 0; i < len; i++) {
-      for (let c = 0; c < ch; c++) {
-        const s = Math.max(-1, Math.min(1, chans[c][i]));
-        dv.setInt16(o, s < 0 ? s * 0x8000 : s * 0x7fff, true);
-        o += 2;
+  // one WAV per track, zipped — drag the folder straight into a DAW. Muted
+  // tracks are out of the mix, so they get no stem (never ship a silent file).
+  async function exportStems() {
+    const bars = renderBars();
+    const parts = TRACKS.filter((t) => !state.mutes[t.id] && trackHasNotes(t.id, bars));
+    if (!parts.length) { toast("Nothing to export — the pattern is empty"); return; }
+    const decisions = exportDecisions(bars); // one table → the stems sum to the mix
+    const name = loopName().toLowerCase();
+    const files = [];
+    for (let i = 0; i < parts.length; i++) {
+      toast(`Rendering stem ${i + 1}/${parts.length} — ${parts[i].name}…`);
+      const { buf, durSamples, sr } = await renderOffline(bars, parts[i].id, decisions);
+      const chans = toChannels(buf, durSamples, !isSong());
+      const blob = window.ClawExport.encodeWav(chans, sr, null);
+      files.push({ name: `claw-${name}-${parts[i].id}.wav`, data: new Uint8Array(await blob.arrayBuffer()) });
+    }
+    download(window.ClawExport.zipStore(files), `claw-${name}-stems.zip`);
+    toast(`Exported ${files.length} stems`);
+  }
+
+  // General MIDI drum map so the kit lands on the right pads in any DAW
+  const GM_DRUM = { kick: 36, snare: 38, clap: 39, chh: 42, ohh: 46 };
+  const NOTE_CH = { bass: 0, acid: 1, stab: 2 };
+  const PPQ = 480;
+
+  function exportMidi() {
+    const bars = renderBars();
+    const decisions = exportDecisions(bars); // same hits as the WAV and the stems
+    const tps = PPQ / 4; // ticks per 16th step
+    const tracks = [];
+    TRACKS.forEach((t) => {
+      const events = [];
+      bars.forEach((pat, bar) => {
+        for (let s = 0; s < STEPS; s++) {
+          const cell = pat[t.id][s];
+          if (!cell || !decisions[bar][t.id][s]) continue;
+          const swingTicks = s % 2 === 1 ? Math.round((state.swing / 100) * 0.5 * tps) : 0;
+          const tick = bar * STEPS * tps + s * tps + swingTicks;
+          const vel = Math.max(1, Math.min(127, Math.round(100 * cellVel(cell))));
+          const note = t.type === "drum" ? GM_DRUM[t.id] : cellNote(cell);
+          const durTicks = t.type === "drum" ? 60 : (t.id === "stab" ? tps * 2 : Math.round(tps * 0.9));
+          events.push({ tick, note, vel, durTicks });
+        }
+      });
+      // A long note must not overlap the next hit of the same pitch — the audio
+      // layers two voices, but a DAW would cut the first note short instead.
+      events.sort((a, b) => a.tick - b.tick);
+      for (let i = 0; i < events.length; i++) {
+        for (let j = i + 1; j < events.length; j++) {
+          if (events[j].note === events[i].note) {
+            events[i].durTicks = Math.max(1, Math.min(events[i].durTicks, events[j].tick - events[i].tick - 1));
+            break;
+          }
+        }
       }
-    }
-    if (cm) {
-      wstr(o, "LIST"); dv.setUint32(o + 4, 4 + 8 + cmPad, true); wstr(o + 8, "INFO");
-      wstr(o + 12, "ICMT"); dv.setUint32(o + 16, cmLen, true);
-      for (let i = 0; i < cm.length; i++) dv.setUint8(o + 20 + i, cm[i]);
-    }
-    return new Blob([ab], { type: "audio/wav" });
+      // MIDI carries the notes, not the mix — muted tracks still export so you
+      // can rebuild the arrangement in your DAW
+      if (events.length) {
+        tracks.push({ name: t.name, channel: t.type === "drum" ? 9 : NOTE_CH[t.id], events });
+      }
+    });
+    if (!tracks.length) { toast("Nothing to export — the pattern is empty"); return; }
+    const blob = window.ClawExport.encodeMidi({ bpm: state.bpm, ppq: PPQ, tracks });
+    download(blob, `claw-${loopName().toLowerCase()}${isSong() ? "-song" : ""}.mid`);
+    toast(`Exported MIDI — ${tracks.length} tracks @ ${state.bpm} BPM`);
   }
 
   // ---------- project format v1 ----------
@@ -792,9 +946,11 @@ Use rests — silence is part of the groove.`;
       banks: state.banks.map((b) => ({ pattern: b.pattern })),
       activeBank: state.activeBank,
       levels: state.levels, mutes: state.mutes,
-      // v0.4 mixer/FX + sound-design — additive fields, format version stays 1
+      // v0.4 mixer/FX + sound-design, v0.5 arrangement — additive fields,
+      // format version stays 1
       pans: state.pans, solos: state.solos, sends: state.sends, fx: state.fx,
       voice: state.voice,
+      mode: state.mode, song: state.song.map((r) => ({ bank: r.bank, repeats: r.repeats })),
       meta: { name: loopName(), gen: state.meta.gen, parent: state.meta.parent, src: state.meta.src },
     };
   }
@@ -862,6 +1018,15 @@ Use rests — silence is part of the groove.`;
     };
     // sound-design params: clamp each against its VOICE_PARAMS range, default
     // any missing one — one data-driven pass, so adding a param can't desync
+    // arrangement — clamp rows, drop junk, always leave at least one row
+    state.mode = data.mode === "song" ? "song" : "loop";
+    const rows = Array.isArray(data.song) ? data.song.slice(0, 64) : [];
+    state.song = rows
+      .filter((r) => r && typeof r === "object")
+      .map((r) => ({ bank: clampInt(r.bank, 0, BANKS - 1, 0), repeats: clampInt(r.repeats, 1, 64, 4) }));
+    if (!state.song.length) state.song = [{ bank: 0, repeats: 4 }];
+    songReset();
+
     TRACKS.forEach((t) => {
       // typeof null === "object", so guard null explicitly (a null voice entry
       // must fall back to defaults, not throw and reject the whole project)
@@ -981,6 +1146,7 @@ Use rests — silence is part of the groove.`;
         buildGrid();
         syncTransportUI();
         paintBankButtons();
+        paintMode();
         syncMixerUI();
         syncSoundUI();
         autosave();
@@ -1021,6 +1187,7 @@ Use rests — silence is part of the groove.`;
     state.bpm = Math.min(200, Math.max(60, +bpmInput.value || 128));
     bpmInput.value = state.bpm;
     if (master) applyFx(); // the dub delay is tempo-synced
+    updateSongLen();       // song duration is tempo-dependent
     autosave();
   });
   document.querySelectorAll("[data-bpm]").forEach((b) =>
@@ -1028,6 +1195,7 @@ Use rests — silence is part of the groove.`;
       state.bpm = Math.min(200, Math.max(60, state.bpm + +b.dataset.bpm));
       bpmInput.value = state.bpm;
       if (master) applyFx();
+      updateSongLen();
       autosave();
     })
   );
@@ -1070,9 +1238,115 @@ Use rests — silence is part of the groove.`;
   const bankBtns = [...document.querySelectorAll(".bank-btn")];
   bankBtns.forEach((b, i) => b.addEventListener("click", () => selectBank(i)));
 
+  // ---------- mode toggle + song timeline ----------
+
+  const songEl = document.getElementById("song");
+  const songChipsEl = document.getElementById("song-chips");
+  const songLenEl = document.getElementById("song-len");
+  const modeBtns = [...document.querySelectorAll(".seg-btn")];
+  const BANK_LETTERS = ["A", "B", "C", "D"];
+  const REPEAT_CYCLE = [1, 2, 4, 8, 16];
+
+  modeBtns.forEach((b) => b.addEventListener("click", () => setMode(b.dataset.mode)));
+
+  function setMode(mode) {
+    state.mode = mode === "song" ? "song" : "loop";
+    songReset();
+    if (state.mode === "song" && playing && state.song.length) setActiveBank(state.song[0].bank);
+    paintMode();
+    autosave();
+  }
+
+  function paintMode() {
+    modeBtns.forEach((b) => {
+      const on = b.dataset.mode === state.mode;
+      b.classList.toggle("active", on);
+      b.setAttribute("aria-pressed", String(on));
+    });
+    songEl.hidden = state.mode !== "song";
+    if (state.mode === "song") paintSong();
+  }
+
+  function paintSong() {
+    songChipsEl.innerHTML = "";
+    state.song.forEach((row, i) => {
+      const chip = document.createElement("div");
+      chip.className = "chip" + (playing && state.mode === "song" && i === songPos ? " playing" : "");
+
+      const bank = document.createElement("button");
+      bank.className = "chip-bank";
+      bank.textContent = BANK_LETTERS[row.bank];
+      bank.title = "Click to change bank";
+      bank.setAttribute("aria-label", `Section ${i + 1} bank ${BANK_LETTERS[row.bank]}`);
+      // update this chip's own label rather than repainting the row — a
+      // rebuild would destroy the button under the cursor and drop focus
+      bank.addEventListener("click", () => {
+        row.bank = (row.bank + 1) % BANKS;
+        bank.textContent = BANK_LETTERS[row.bank];
+        bank.setAttribute("aria-label", `Section ${i + 1} bank ${BANK_LETTERS[row.bank]}`);
+        autosave();
+      });
+
+      const rep = document.createElement("button");
+      rep.className = "chip-rep";
+      rep.textContent = row.repeats + "×";
+      rep.title = "Click to change length in bars";
+      rep.setAttribute("aria-label", `Section ${i + 1} length ${row.repeats} bars`);
+      rep.addEventListener("click", () => {
+        const idx = REPEAT_CYCLE.indexOf(row.repeats);
+        row.repeats = REPEAT_CYCLE[(idx < 0 ? 0 : idx + 1) % REPEAT_CYCLE.length];
+        rep.textContent = row.repeats + "×";
+        rep.setAttribute("aria-label", `Section ${i + 1} length ${row.repeats} bars`);
+        updateSongLen();
+        autosave();
+      });
+
+      const del = document.createElement("button");
+      del.className = "chip-del";
+      del.textContent = "✕";
+      del.title = "Remove section";
+      del.setAttribute("aria-label", `Remove section ${i + 1}`);
+      del.addEventListener("click", () => {
+        if (state.song.length <= 1) { toast("A song needs at least one section"); return; }
+        state.song.splice(i, 1);
+        songReset();
+        // the playhead jumped back to section 0 — the sounding bank must follow,
+        // or the audio keeps playing the deleted section's bank
+        if (playing && state.mode === "song") setActiveBank(state.song[0].bank);
+        paintSong(); autosave();
+      });
+
+      chip.append(bank, rep, del);
+      songChipsEl.appendChild(chip);
+    });
+    updateSongLen();
+  }
+
+  function updateSongLen() {
+    const bars = songTotalBars();
+    const secs = bars * STEPS * secondsPerStep();
+    songLenEl.textContent = `${bars} bars · ${Math.floor(secs / 60)}:${String(Math.round(secs % 60)).padStart(2, "0")}`;
+  }
+
+  // playhead only — safe to call from the audio scheduler
+  function highlightSong() {
+    [...songChipsEl.children].forEach((c, i) => {
+      c.classList.toggle("playing", playing && state.mode === "song" && i === songPos);
+    });
+  }
+
+  document.getElementById("song-add").addEventListener("click", () => {
+    if (state.song.length >= 64) { toast("64 sections is the limit"); return; }
+    const last = state.song[state.song.length - 1];
+    state.song.push({ bank: last ? (last.bank + 1) % BANKS : 0, repeats: 4 });
+    paintSong(); autosave();
+  });
+
   document.getElementById("mutate").addEventListener("click", mutate);
   document.getElementById("clear").addEventListener("click", clearPattern);
   document.getElementById("export").addEventListener("click", exportWav);
+  document.getElementById("export-stems").addEventListener("click", exportStems);
+  document.getElementById("export-midi").addEventListener("click", exportMidi);
   document.getElementById("share").addEventListener("click", shareLink);
   document.getElementById("save").addEventListener("click", saveProject);
   const loadFileInput = document.getElementById("load-file");
@@ -1312,6 +1586,7 @@ Use rests — silence is part of the groove.`;
   buildGrid();
   syncTransportUI();
   paintBankButtons();
+  paintMode();
 
   // installable + offline once visited; skipped on file:// and on localhost
   // (a cache-first worker would serve stale files during development)

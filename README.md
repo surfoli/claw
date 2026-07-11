@@ -14,7 +14,9 @@ Built for DJs who want a quick idea machine, producers who want a sketchpad, and
 - **16-step sequencer** — swing, master filter, per-track level and mute. Space bar starts and stops.
 - **Algorithmic generators** — one-press TECHNO / HOUSE / ACID / BREAKS patterns built on Euclidean rhythms and pentatonic note walks. MUTATE nudges the pattern while it plays.
 - **Bring-your-own AI** — describe a loop in plain language ("dark rolling techno, minimal hats, hypnotic acid line") and let a model program the sequencer. Works with an Anthropic API key or any OpenAI-compatible endpoint. Your key is stored in your browser and sent directly to the provider — CLAW has no servers.
-- **WAV export** — render your loop as a clean 2-bar 44.1 kHz WAV (`claw-iron-moth-131bpm.wav` — every loop gets a deterministic name), ready for your DAW, CDJs, or sampler. The file carries its own share URL in the WAV comment field, so a loop can always find its way home.
+- **Song mode** — arrange your banks into an actual track: `A ×4 · B ×8 · C ×16`. Switch LOOP/SONG in the transport, click a chip to change its bank or length. The playhead follows; export renders the whole arrangement.
+- **Exports a DAW accepts** — **WAV** (seamless 2-bar loop, or the full song), **STEMS** (one WAV per track, zipped), and **MIDI** (Standard MIDI File type 1: drums on the GM map, one track per part, with your velocities and swing). Drag any of it into Ableton, FL, Logic, or a sampler.
+- **WAV export** — a clean 44.1 kHz WAV (`claw-iron-moth-131bpm.wav` — every loop gets a deterministic name). The file carries its own share URL in the WAV comment field, so a loop can always find its way home.
 - **Loop sharing & remix chains** — every pattern serializes into a URL. Open someone's loop, change it, share again: the link tracks the remix generation (`HOLLOW-KERNEL · GEN 3`).
 - **Projects are files you own** — SAVE/LOAD as `.json`, plus autosave in your browser. Works offline; CLAW is an installable PWA.
 
@@ -43,7 +45,9 @@ No build step. No dependencies. Vanilla HTML/CSS/JS.
 | Change velocity (normal/accent/ghost) | alt-click a lit step |
 | Change probability (100/75/50/25%) | scroll/wheel over a lit step |
 | Switch pattern bank (A–D) | click a bank button — instant when stopped, queued to the next bar when playing |
+| Build a track | switch to **SONG**, add sections, click a chip's letter/length to change it |
 | Mixer: pan, solo, delay/reverb sends | open the **MIX** drawer |
+| Shape the sounds | open the **SOUND** drawer |
 | Play / stop | space bar or the orange button |
 | Mute a track | the small circle left of the steps |
 
@@ -73,7 +77,7 @@ Patterns you make and share are the best bug reports.
 
 ## Where this is going
 
-CLAW is becoming a studio: pattern banks and velocity (v0.3), mixer/FX/p-locks (v0.4), MIDI + stem export (v0.5), song mode with an AI arranger (v1.0), samples (v1.1). The full plan is in [ROADMAP.md](ROADMAP.md).
+Shipped: pattern banks and step dynamics (v0.3), mixer + FX + sound design (v0.4), song mode and MIDI/stem export (v0.5). Next: an AI arranger and a co-producer chat that edits the grid while it plays, then sample import. The full plan is in [ROADMAP.md](ROADMAP.md).
 
 ## The pledge
 

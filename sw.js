@@ -2,13 +2,14 @@
    visit. Release checklist: bump CACHE on every release or users keep the old
    version forever. */
 
-const CACHE = "claw-v0.4.1";
+const CACHE = "claw-v0.5.0";
 const CORE = [
   "./",
   "./index.html",
   "./css/claw.css",
   "./js/synth.js",
   "./js/generators.js",
+  "./js/export.js",
   "./js/claw.js",
   "./manifest.json",
   "./assets/icon-192.png",

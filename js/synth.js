@@ -5,7 +5,11 @@
 (function () {
   "use strict";
 
-  // Shared noise buffer per context (keyed weakly so offline ctxs get their own)
+  // Shared noise buffer per context (keyed weakly so offline ctxs get their own).
+  // Filled from a FIXED-seed PRNG, not Math.random — so every render (live, WAV,
+  // each stem) uses the identical noise grain. That makes exports deterministic
+  // (re-export is byte-identical) and lets stems reconstruct the mix; one second
+  // of white noise sounds the same seeded or not.
   const noiseBuffers = new WeakMap();
 
   function noise(ctx) {
@@ -13,7 +17,13 @@
     if (!buf) {
       buf = ctx.createBuffer(1, ctx.sampleRate * 1, ctx.sampleRate);
       const data = buf.getChannelData(0);
-      for (let i = 0; i < data.length; i++) data[i] = Math.random() * 2 - 1;
+      let a = 0x9e3779b9;
+      for (let i = 0; i < data.length; i++) {
+        a |= 0; a = (a + 0x6d2b79f5) | 0;
+        let t = Math.imul(a ^ (a >>> 15), 1 | a);
+        t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+        data[i] = ((t ^ (t >>> 14)) >>> 0) / 2147483648 - 1;
+      }
       noiseBuffers.set(ctx, buf);
     }
     const src = ctx.createBufferSource();
@@ -226,14 +236,21 @@
 
   // Procedural reverb impulse: a decaying stereo noise burst. No samples —
   // the whole point of CLAW. `decay` sets the exponential falloff shape.
-  function makeIR(ctx, seconds, decay) {
+  // Pass a `seed` to make the noise deterministic — export needs the SAME IR
+  // across the mix and every stem so the stems sum back to the mix and a
+  // re-export is byte-identical. Live playback omits it (fresh random is fine).
+  function makeIR(ctx, seconds, decay, seed) {
     const rate = ctx.sampleRate;
     const len = Math.max(1, Math.floor(rate * seconds));
     const ir = ctx.createBuffer(2, len, rate);
+    let a = seed >>> 0;
+    const rnd = seed == null
+      ? Math.random
+      : () => { a |= 0; a = (a + 0x6d2b79f5) | 0; let t = Math.imul(a ^ (a >>> 15), 1 | a); t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t; return ((t ^ (t >>> 14)) >>> 0) / 4294967296; };
     for (let ch = 0; ch < 2; ch++) {
       const d = ir.getChannelData(ch);
       for (let i = 0; i < len; i++) {
-        d[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / len, decay);
+        d[i] = (rnd() * 2 - 1) * Math.pow(1 - i / len, decay);
       }
     }
     return ir;

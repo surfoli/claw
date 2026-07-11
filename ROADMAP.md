@@ -38,20 +38,23 @@ Progress is tracked in issues; ship order matters more than ship dates.
 - [ ] Elektron-style p-locks: per-step param overrides — deferred
 - [ ] AI sound designer: "describe a kick, get a kick" (params JSON through the existing BYO-key plumbing) — deferred
 
-## v0.5 — Studio I/O + ecosystem (2–3 weeks)
+## v0.5 — Song mode + Studio I/O ✅ (shipped)
 
-- [ ] Standard MIDI File export (drums ch10, notes with velocities) — CLAW becomes a front-end to every DAW
-- [ ] Stem export (one offline render per track, zipped)
+- [x] **Song mode** — a LOOP/SONG toggle and an arrangement of sections (`A ×4 · B ×8 · C ×16`). The playhead walks it and loops; export renders one pass.
+- [x] **Standard MIDI File export** (type 1, GM drum map on ch10, one track per part, velocities + swing) — CLAW becomes a front-end to every DAW
+- [x] **Stem export** — one offline render per track, bundled into a store-only ZIP written by hand
+- [x] Export encoders extracted to `js/export.js` (pure: WAV, MIDI, ZIP, CRC32)
+- [ ] Per-row track mutes / fills / filter sweeps (arrangement automation)
 - [ ] WebMIDI in + MIDI clock out (feature-detected)
 - [ ] Freeze the plugin contract: `CLAW.registerVoice({id, name, type, params, render})`; packs are data-only JSON
 - [ ] First paid style packs (open format, same as free packs)
 
-## v1.0 — Song mode: "it's a studio now" (3–4 weeks)
+## v1.0 — "it's a studio now" (the relaunch)
 
-- [ ] Song timeline: ordered pattern rows with repeats, per-row track mutes (mute automation is 80 % of EDM arrangement), fills, filter sweeps
-- [ ] Full-song WAV + MP3 export; live-jam recording
-- [ ] LLM arranger: one call returns the whole timeline
+- [ ] LLM arranger: one call returns the whole song timeline
 - [ ] Co-producer chat: tool-use AI that edits the grid while the loop plays
+- [ ] MP3 export; live-jam recording
+- [ ] Arrangement automation (per-section mutes, fills, filter sweeps)
 - [ ] The relaunch. Everything above ships free in the browser.
 
 ## v1.1 — Samples + Pro packaging (4–6 weeks)

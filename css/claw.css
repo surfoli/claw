@@ -210,6 +210,66 @@ input[type="range"]::-moz-range-thumb {
 }
 input[type="range"]:hover::-moz-range-thumb { background: #ffffff; }
 
+/* ---------- mode segmented control ---------- */
+
+.seg {
+  display: flex;
+  border: 1px solid var(--panel-edge);
+  border-radius: 4px;
+  overflow: hidden;
+}
+.seg-btn {
+  background: transparent;
+  border: none;
+  color: var(--silk);
+  font-family: var(--mono);
+  font-size: 10px;
+  letter-spacing: 0.14em;
+  padding: 10px 14px;
+  cursor: pointer;
+}
+.seg-btn + .seg-btn { border-left: 1px solid var(--panel-edge); }
+.seg-btn:hover { color: var(--silver); }
+.seg-btn.active { background: var(--accent); color: var(--panel); }
+
+/* ---------- song arrangement ---------- */
+
+.song {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  padding-top: 14px;
+}
+.song-chips { display: flex; gap: 8px; flex-wrap: wrap; }
+.song-len { color: var(--silk); margin-left: 4px; }
+.song-add { padding: 7px 10px !important; }
+
+.chip {
+  display: flex;
+  align-items: stretch;
+  border: 1px solid var(--panel-edge);
+  border-radius: 4px;
+  overflow: hidden;
+}
+.chip.playing { border-color: var(--accent); }
+.chip button {
+  background: transparent;
+  border: none;
+  color: #e8e6e1;
+  font-family: var(--mono);
+  font-size: 11px;
+  padding: 7px 9px;
+  cursor: pointer;
+}
+.chip button + button { border-left: 1px solid var(--panel-edge); }
+.chip-bank { font-weight: 600; min-width: 26px; }
+.chip.playing .chip-bank { color: var(--accent); }
+.chip-rep { color: var(--silk); min-width: 30px; }
+.chip-del { color: var(--silk-dark); }
+.chip button:hover { background: rgba(232, 230, 225, 0.08); }
+.chip-del:hover { color: var(--accent); }
+
 /* ---------- pattern banks ---------- */
 
 .banks {

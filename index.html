@@ -28,7 +28,7 @@
   <div class="chassis-meta">
     <span>LOOP MACHINE</span>
     <span class="meta-dot" aria-hidden="true"></span>
-    <span>FIRMWARE 0.4.1</span>
+    <span>FIRMWARE 0.5.0</span>
     <span class="meta-dot" aria-hidden="true"></span>
     <span>44.1 kHz</span>
   </div>
@@ -41,6 +41,14 @@
     <button id="play" class="play-btn" aria-label="Play or stop (Space)">
       <span class="play-glyph" aria-hidden="true"></span>
     </button>
+
+    <div class="param">
+      <span class="silk">MODE</span>
+      <div class="seg" role="group" aria-label="Playback mode">
+        <button class="seg-btn active" data-mode="loop" aria-pressed="true">LOOP</button>
+        <button class="seg-btn" data-mode="song" aria-pressed="false">SONG</button>
+      </div>
+    </div>
 
     <div class="param">
       <label class="silk" for="bpm">BPM</label>
@@ -80,6 +88,14 @@
     <span class="silk banks-hint">switch while playing — queues for the next bar</span>
   </section>
 
+  <!-- Song arrangement (chips built by JS; visible in SONG mode) -->
+  <section class="song" id="song" hidden aria-label="Song arrangement">
+    <span class="silk tool-label">SONG</span>
+    <div class="song-chips" id="song-chips"></div>
+    <button class="tool-btn song-add" id="song-add">+ SECTION</button>
+    <span class="silk song-len" id="song-len"></span>
+  </section>
+
   <!-- Sequencer grid (built by JS) -->
   <section class="grid" id="grid" aria-label="Step sequencer"></section>
   <p class="grid-hint silk">Note tracks T6–T8: click = on · shift-click = next note · alt-click = velocity · wheel = probability · Ctrl+Z = undo</p>
@@ -107,8 +123,10 @@
     </div>
     <div class="tool-group">
       <span class="silk tool-label">OUT</span>
-      <button class="tool-btn" id="export">EXPORT WAV</button>
-      <button class="tool-btn" id="share">COPY LINK</button>
+      <button class="tool-btn" id="export">WAV</button>
+      <button class="tool-btn" id="export-stems">STEMS</button>
+      <button class="tool-btn" id="export-midi">MIDI</button>
+      <button class="tool-btn" id="share">LINK</button>
     </div>
     <div class="tool-group">
       <button class="tool-btn" id="sound-toggle" aria-expanded="false">SOUND ⌄</button>
@@ -191,6 +209,7 @@
 
 <script src="js/synth.js"></script>
 <script src="js/generators.js"></script>
+<script src="js/export.js"></script>
 <script src="js/claw.js"></script>
 </body>
 </html>
